@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AHP Portfolio Selector</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f8f9fa;color:#1a1a2e;line-height:1.6}
+.container{max-width:800px;margin:0 auto;padding:20px}
+h1{font-size:28px;font-weight:700;color:#1a1a2e;margin-bottom:4px}
+h2{font-size:22px;font-weight:600;color:#1a1a2e;margin-bottom:16px}
+h3{font-size:16px;font-weight:600;color:#1a1a2e;margin-bottom:8px}
+.subtitle{color:#666;font-size:15px;margin-bottom:32px}
+.header{text-align:center;padding:40px 0 20px;border-bottom:1px solid #e8e8e8;margin-bottom:32px}
+.badge{display:inline-block;background:#e8f4fd;color:#1a73e8;padding:4px 12px;border-radius:20px;font-size:12px;font-weight:600;margin:4px}
+.progress-bar{background:#e8e8e8;height:6px;border-radius:3px;margin:0 0 32px;overflow:hidden}
+.progress-fill{background:linear-gradient(90deg,#1a73e8,#34a853);height:100%;border-radius:3px;transition:width .4s ease}
+.question-card{background:#fff;border-radius:16px;padding:32px;margin-bottom:24px;box-shadow:0 1px 3px rgba(0,0,0,.08)}
+.q-number{color:#1a73e8;font-size:13px;font-weight:600;margin-bottom:8px}
+.q-text{font-size:18px;font-weight:600;margin-bottom:20px;color:#1a1a2e}
+.option{border:2px solid #e8e8e8;border-radius:12px;padding:14px 18px;margin-bottom:10px;cursor:pointer;transition:all .2s;display:flex;align-items:center;gap:12px}
+.option:hover{border-color:#1a73e8;background:#f8fbff}
+.option.selected{border-color:#1a73e8;background:#e8f4fd}
+.option-letter{width:32px;height:32px;border-radius:50%;background:#f0f0f0;display:flex;align-items:center;justify-content:center;font-weight:600;font-size:13px;color:#666;flex-shrink:0}
+.option.selected .option-letter{background:#1a73e8;color:#fff}
+.option-text{font-size:14px}
+.btn{background:#1a73e8;color:#fff;border:none;padding:14px 40px;border-radius:12px;font-size:16px;font-weight:600;cursor:pointer;transition:all .2s}
+.btn:hover{background:#1557b0}
+.btn:disabled{background:#ccc;cursor:not-allowed}
+.btn-outline{background:transparent;border:2px solid #1a73e8;color:#1a73e8}
+.btn-outline:hover{background:#e8f4fd}
+.nav-buttons{display:flex;justify-content:space-between;margin-top:16px}
+.hidden{display:none}
+.loading{text-align:center;padding:60px 20px}
+.spinner{width:48px;height:48px;border:4px solid #e8e8e8;border-top:4px solid #1a73e8;border-radius:50%;animation:spin 1s linear infinite;margin:0 auto 20px}
+@keyframes spin{to{transform:rotate(360deg)}}
+.loading-text{color:#666;font-size:15px}
+.results{padding:20px 0}
+.profile-card{background:linear-gradient(135deg,#1a73e8,#0d47a1);color:#fff;border-radius:20px;padding:32px;margin-bottom:24px;text-align:center}
+.profile-name{font-size:28px;font-weight:700;margin-bottom:8px;text-transform:uppercase}
+.profile-desc{font-size:15px;opacity:.9;max-width:600px;margin:0 auto}
+.stats-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:24px}
+.stat-card{background:#fff;border-radius:12px;padding:16px;text-align:center;box-shadow:0 1px 3px rgba(0,0,0,.08)}
+.stat-value{font-size:24px;font-weight:700;color:#1a73e8}
+.stat-label{font-size:12px;color:#888;margin-top:4px}
+.section{background:#fff;border-radius:16px;padding:24px;margin-bottom:20px;box-shadow:0 1px 3px rgba(0,0,0,.08)}
+.ranking-item{display:flex;align-items:center;gap:14px;padding:14px 0;border-bottom:1px solid #f0f0f0}
+.ranking-item:last-child{border:none}
+.rank-num{width:36px;height:36px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:16px;flex-shrink:0}
+.rank-1{background:#ffd700;color:#7a6100}
+.rank-2{background:#e8e8e8;color:#555}
+.rank-3{background:#f4c29b;color:#7a4a00}
+.rank-other{background:#f5f5f5;color:#999}
+.rank-name{font-weight:600;font-size:15px;flex:1}
+.rank-bar-wrap{flex:2;height:24px;background:#f0f0f0;border-radius:12px;overflow:hidden;position:relative}
+.rank-bar{height:100%;border-radius:12px;transition:width 1s ease;display:flex;align-items:center;justify-content:flex-end;padding:0 8px}
+.rank-bar-1{background:linear-gradient(90deg,#ffd700,#ffaa00)}
+.rank-bar-2{background:#c0c0c0}
+.rank-bar-3{background:#cd7f32}
+.rank-bar-default{background:#ddd}
+.rank-score{font-size:13px;font-weight:600;color:#fff;text-shadow:0 1px 2px rgba(0,0,0,.2)}
+.winner-box{background:#e8f5e9;border:2px solid #4caf50;border-radius:16px;padding:24px;text-align:center;margin-bottom:24px}
+.winner-title{font-size:14px;color:#2e7d32;font-weight:600;margin-bottom:4px}
+.winner-name{font-size:32px;font-weight:700;color:#1b5e20}
+.winner-score{font-size:18px;color:#388e3c;margin-top:4px}
+.criteria-list{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.criteria-item{display:flex;align-items:center;gap:8px;padding:6px 0;font-size:13px}
+.criteria-bar{height:8px;border-radius:4px;background:#e8e8e8;flex:1;overflow:hidden}
+.criteria-fill{height:100%;border-radius:4px;background:#1a73e8}
+.criteria-name{min-width:140px;color:#555}
+.criteria-weight{min-width:24px;font-weight:600;color:#1a73e8;text-align:right}
+.stock-table{width:100%;border-collapse:collapse;font-size:13px}
+.stock-table th{text-align:left;padding:10px 8px;border-bottom:2px solid #e8e8e8;font-size:12px;color:#888;font-weight:600}
+.stock-table td{padding:10px 8px;border-bottom:1px solid #f0f0f0}
+.stock-table tr:nth-child(even){background:#fafafa}
+.positive{color:#2e7d32;font-weight:600}
+.negative{color:#c62828;font-weight:600}
+.data-badge{display:inline-block;padding:3px 10px;border-radius:10px;font-size:11px;font-weight:600}
+.data-live{background:#e8f5e9;color:#2e7d32}
+.data-demo{background:#fff3e0;color:#e65100}
+.footer{text-align:center;padding:32px 0;color:#999;font-size:13px}
+</style>
+</head>
+<body>
+<div class="container">
+
+<!-- HEADER -->
+<div class="header">
+<h1>AHP Portfolio Selector</h1>
+<p class="subtitle">Selección de portafolios mediante Proceso Analítico Jerárquico</p>
+<span class="badge">S&P 500</span>
+<span class="badge">Eurostoxx 600</span>
+<span class="badge">Nikkei 225</span>
+<span class="badge">15 criterios</span>
+<span class="badge">7 perfiles</span>
+</div>
+
+<!-- CUESTIONARIO -->
+<div id="questionnaire">
+<div class="progress-bar"><div class="progress-fill" id="progress" style="width:0%"></div></div>
+<div id="questions-container"></div>
+<div class="nav-buttons">
+<button class="btn btn-outline" id="btn-prev" onclick="prevQuestion()" disabled>Anterior</button>
+<button class="btn" id="btn-next" onclick="nextQuestion()" disabled>Siguiente</button>
+</div>
+</div>
+
+<!-- LOADING -->
+<div id="loading" class="hidden loading">
+<div class="spinner"></div>
+<div class="loading-text" id="loading-text">Descargando datos de mercado...</div>
+</div>
+
+<!-- RESULTADOS -->
+<div id="results" class="hidden results"></div>
+
+<div class="footer">
+TFG — Selección de portafolios mediante AHP · Saaty (1990) · Escobar (2015)
+</div>
+</div>
+
+<script>
+const questions = {{ questions | tojson }};
+let current = 0;
+let answers = {};
+
+function renderQuestion(idx) {
+    const q = questions[idx];
+    const container = document.getElementById('questions-container');
+    const selected = answers[q.id] || '';
+    container.innerHTML = `
+        <div class="question-card">
+            <div class="q-number">Pregunta ${idx+1} de ${questions.length}</div>
+            <div class="q-text">${q.texto}</div>
+            ${q.opciones.map(([letra, texto]) => `
+                <div class="option ${selected===letra?'selected':''}" onclick="selectOption('${q.id}','${letra}')">
+                    <div class="option-letter">${letra.toUpperCase()}</div>
+                    <div class="option-text">${texto}</div>
+                </div>
+            `).join('')}
+        </div>
+    `;
+    document.getElementById('progress').style.width = ((idx+1)/questions.length*100)+'%';
+    document.getElementById('btn-prev').disabled = idx === 0;
+    document.getElementById('btn-next').textContent = idx === questions.length-1 ? 'Ver resultados' : 'Siguiente';
+    document.getElementById('btn-next').disabled = !answers[q.id];
+}
+
+function selectOption(qid, letter) {
+    answers[qid] = letter;
+    renderQuestion(current);
+}
+
+function nextQuestion() {
+    if (current < questions.length - 1) { current++; renderQuestion(current); }
+    else { submitAnswers(); }
+}
+
+function prevQuestion() {
+    if (current > 0) { current--; renderQuestion(current); }
+}
+
+function submitAnswers() {
+    document.getElementById('questionnaire').classList.add('hidden');
+    document.getElementById('loading').classList.remove('hidden');
+
+    const messages = [
+        'Descargando datos de mercado...',
+        'Analizando acciones de 3 índices...',
+        'Filtrando por criterios del perfil...',
+        'Construyendo portafolios (Markowitz)...',
+        'Ejecutando análisis AHP (15 criterios)...',
+        'Generando ranking final...',
+    ];
+    let mi = 0;
+    const msgInterval = setInterval(() => {
+        mi++;
+        if (mi < messages.length) document.getElementById('loading-text').textContent = messages[mi];
+    }, 2000);
+
+    fetch('/analyze', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({answers: answers, use_live: true}),
+    })
+    .then(r => r.json())
+    .then(data => {
+        clearInterval(msgInterval);
+        document.getElementById('loading').classList.add('hidden');
+        if (data.success) showResults(data);
+        else { alert('Error: ' + data.error); location.reload(); }
+    })
+    .catch(err => {
+        clearInterval(msgInterval);
+        alert('Error de conexión: ' + err);
+        location.reload();
+    });
+}
+
+function showResults(data) {
+    const r = document.getElementById('results');
+    r.classList.remove('hidden');
+
+    const maxScore = Math.max(...data.ranking.map(p => p.score));
+
+    r.innerHTML = `
+        <div class="profile-card">
+            <div class="profile-name">${data.profile.replace('_',' ')}</div>
+            <div class="profile-desc">${data.profile_description}</div>
+        </div>
+
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-value">${data.n_stocks_analyzed}</div>
+                <div class="stat-label">Acciones analizadas</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">${data.n_stocks_selected}</div>
+                <div class="stat-label">Acciones seleccionadas</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">${data.consistency_ratio}</div>
+                <div class="stat-label">CR (< 0.10 = consistente)</div>
+            </div>
+        </div>
+
+        <div class="winner-box">
+            <div class="winner-title">PORTAFOLIO RECOMENDADO</div>
+            <div class="winner-name">${data.winner.name}</div>
+            <div class="winner-score">Puntuación AHP: ${data.winner.score}%</div>
+            <span class="data-badge ${data.is_synthetic ? 'data-demo' : 'data-live'}">
+                ${data.is_synthetic ? 'Datos sintéticos' : 'Datos reales (Yahoo Finance)'}
+            </span>
+        </div>
+
+        <div class="section">
+            <h3>Ranking AHP</h3>
+            ${data.ranking.map(p => `
+                <div class="ranking-item">
+                    <div class="rank-num rank-${p.rank <= 3 ? p.rank : 'other'}">${p.rank}</div>
+                    <div class="rank-name">${p.name}</div>
+                    <div class="rank-bar-wrap">
+                        <div class="rank-bar rank-bar-${p.rank <= 3 ? p.rank : 'default'}"
+                             style="width:${(p.score/maxScore*100).toFixed(0)}%">
+                            <span class="rank-score">${p.score}%</span>
+                        </div>
+                    </div>
+                </div>
+            `).join('')}
+        </div>
+
+        <div class="section">
+            <h3>Pesos de criterios (perfil ${data.profile.replace('_',' ')})</h3>
+            <div class="criteria-list">
+                ${data.top_criteria.map(c => `
+                    <div class="criteria-item">
+                        <span class="criteria-name">${c.name}</span>
+                        <div class="criteria-bar"><div class="criteria-fill" style="width:${c.weight/9*100}%"></div></div>
+                        <span class="criteria-weight">${c.weight}</span>
+                    </div>
+                `).join('')}
+            </div>
+        </div>
+
+        <div class="section">
+            <h3>Detalle de portafolios candidatos</h3>
+            <table class="stock-table">
+                <tr><th>Portafolio</th><th>Rentab.</th><th>Volat.</th><th>Sharpe</th><th>Max DD</th><th>Beta</th><th>Alpha</th></tr>
+                ${data.portfolios.map(p => `
+                    <tr>
+                        <td><strong>${p.name}</strong></td>
+                        <td class="${p.rentabilidad >= 0 ? 'positive' : 'negative'}">${p.rentabilidad}%</td>
+                        <td>${p.volatilidad}%</td>
+                        <td>${p.sharpe}</td>
+                        <td>${p.max_drawdown}%</td>
+                        <td>${p.beta}</td>
+                        <td class="${p.alpha >= 0 ? 'positive' : 'negative'}">${p.alpha}%</td>
+                    </tr>
+                `).join('')}
+            </table>
+        </div>
+
+        <div class="section">
+            <h3>Acciones seleccionadas</h3>
+            <table class="stock-table">
+                <tr><th>Ticker</th><th>Rentabilidad</th><th>Sharpe</th><th>Volatilidad</th><th>Beta</th></tr>
+                ${data.stocks.map(s => `
+                    <tr>
+                        <td><strong>${s.ticker}</strong></td>
+                        <td class="${s.rentabilidad >= 0 ? 'positive' : 'negative'}">${s.rentabilidad}%</td>
+                        <td>${s.sharpe}</td>
+                        <td>${s.volatilidad}%</td>
+                        <td>${s.beta}</td>
+                    </tr>
+                `).join('')}
+            </table>
+        </div>
+
+        ${data.allocation && data.allocation.length > 0 ? `
+        <div class="section" style="border:2px solid #4caf50">
+            <h3 style="color:#2e7d32">Asignación de inversión recomendada — ${data.winner.name}</h3>
+            <p style="font-size:13px;color:#666;margin-bottom:16px">Porcentaje del capital a invertir en cada acción (pesos optimizados por Markowitz):</p>
+            <div style="display:flex;flex-wrap:wrap;gap:12px;justify-content:center">
+                ${data.allocation.map(a => `
+                    <div style="background:#f0f7f0;border:2px solid #4caf50;border-radius:14px;padding:18px 28px;text-align:center;min-width:130px">
+                        <div style="font-size:22px;font-weight:700;color:#2e7d32">${a.weight}</div>
+                        <div style="font-size:15px;font-weight:600;color:#1a1a2e;margin-top:4px">${a.ticker}</div>
+                    </div>
+                `).join('')}
+            </div>
+        </div>
+        ` : ''}
+
+        <div style="text-align:center;margin:32px 0;display:flex;gap:16px;justify-content:center;flex-wrap:wrap">
+            <button class="btn" onclick="window.open('/download-report','_blank')" style="background:#2e7d32">Descargar informe Word</button>
+            <button class="btn btn-outline" onclick="location.reload()">Repetir cuestionario</button>
+        </div>
+    `;
+}
+
+// Iniciar
+renderQuestion(0);
+</script>
+</body>
+</html>
