@@ -154,6 +154,9 @@ def analyze():
             profile_name=profile, progress=False,
         )
 
+        if selected.empty:
+            return jsonify({"success": False, "error": "Ninguna acción superó los estrictos filtros de su perfil de riesgo. Intente con menos aversión al riesgo o ajuste sus respuestas."})
+
         # ── Portafolios (M5) ──
         all_ret = pd.concat(all_returns.values(), axis=1)
         first_idx = market_data["metadata"]["indices"][0]
@@ -161,6 +164,9 @@ def analyze():
         bench_ret = np.log(bench/bench.shift(1)).dropna()
 
         best = build_portfolios(selected, all_ret, bench_ret, avg_rf, progress=False)
+
+        if best.empty:
+            return jsonify({"success": False, "error": "No se pudieron generar portafolios con el número de acciones disponible."})
 
         # ── AHP (M6) ──
         engine = AHPEngine(profile=profile)

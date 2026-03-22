@@ -1,4 +1,17 @@
+# Python
 __pycache__/
 *.pyc
 *.pyo
 .env
+*.xlsx
+*.docx
+
+# Node
+node_modules/
+.next/
+apps/web/.env.local
+
+# IDE
+.vscode/
+.idea/
+*.swp

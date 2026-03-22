@@ -235,8 +235,13 @@ def generate_portfolios(
     all_portfolios = []
     portfolio_count = 0
 
+    import random
     for size in range(min_stocks, min(max_stocks + 1, n + 1)):
         combos = list(combinations(tickers, size))
+        # Cap combinations to avoid very long computation
+        if len(combos) > 200:
+            random.seed(42)
+            combos = random.sample(combos, 200)
         if progress:
             print(f"    {size} acciones: {len(combos)} combinaciones")
 
@@ -376,8 +381,8 @@ def build_portfolios(
 
     # Determinar tamaños de portafolio según acciones disponibles
     n = len(selected_stocks)
-    min_s = max(2, n - 3)
-    max_s = min(n, 5)
+    min_s = 3
+    max_s = min(n, 6)
 
     all_portfolios = generate_portfolios(
         selected_stocks, returns_df, benchmark_returns,
