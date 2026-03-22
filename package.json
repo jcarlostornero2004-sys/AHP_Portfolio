@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "concurrently -n api,web -c blue,green \"npm run dev:api\" \"npm run dev:web\"",
-    "dev:api": "cd apps/api && python3 -m uvicorn main:app --reload --port 8000",
+    "dev:api": "cd apps/api && python -m uvicorn main:app --reload --port 8000",
     "dev:web": "cd apps/web && npm run dev",
     "build": "cd apps/web && npm run build",
     "install:all": "cd apps/web && npm install"
