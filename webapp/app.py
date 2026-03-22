@@ -573,15 +573,15 @@ def generate_word_report(data):
 # ─────────────────────────────────────────────────────────────────
 
 def open_browser():
-    webbrowser.open("http://localhost:5000")
+    webbrowser.open("http://localhost:3000")
 
 
 if __name__ == "__main__":
-    print("\n" + "█" * 50)
-    print("  AHP Portfolio Selector — Web App")
+    print("\n" + "=" * 50)
+    print("  AHP Portfolio Selector - Web App")
     print("  Abriendo en tu navegador...")
     print("  Para cerrar: pulsa Ctrl+C en esta ventana")
-    print("█" * 50 + "\n")
+    print("=" * 50 + "\n")
 
     threading.Timer(1.5, open_browser).start()
-    app.run(debug=False, port=5000)
+    app.run(debug=False, port=3000)

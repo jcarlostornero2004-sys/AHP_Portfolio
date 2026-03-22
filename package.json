@@ -1,0 +1,8 @@
+{
+  "name": "ahp-portfolio",
+  "version": "1.0.0",
+  "description": "AHP Portfolio Selector - Web App",
+  "scripts": {
+    "dev": "python webapp/app.py"
+  }
+}
