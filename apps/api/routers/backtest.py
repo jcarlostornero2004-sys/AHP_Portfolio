@@ -14,8 +14,8 @@ router = APIRouter(prefix="/api/backtest", tags=["backtest"])
 
 
 def _run_backtest(tickers, weights, market_data, rf_annual, train_ratio):
-    """Run backtest synchronously."""
-    from modules.backtester import run_backtest
+    """Run backtest synchronously, computing metrics for both train and test periods."""
+    from modules.backtester import split_data, compute_portfolio_performance
 
     first_idx = market_data["metadata"]["indices"][0]
     bench_series = market_data["benchmarks"][first_idx]
@@ -25,15 +25,16 @@ def _run_backtest(tickers, weights, market_data, rf_annual, train_ratio):
         axis=1,
     )
 
-    return run_backtest(
-        prices=all_prices,
-        benchmark_prices=bench_series,
-        tickers=tickers,
-        weights=weights,
-        rf_annual=rf_annual,
-        train_ratio=train_ratio,
-        progress=False,
-    )
+    prices_train, prices_test = split_data(all_prices, train_ratio)
+    bench_df = bench_series.to_frame()
+    bench_train_df, bench_test_df = split_data(bench_df, train_ratio)
+    bench_train = bench_train_df.iloc[:, 0]
+    bench_test = bench_test_df.iloc[:, 0]
+
+    train = compute_portfolio_performance(prices_train, tickers, weights, bench_train, rf_annual)
+    test = compute_portfolio_performance(prices_test, tickers, weights, bench_test, rf_annual)
+
+    return {"train": train, "test": test}
 
 
 @router.post("")
@@ -57,10 +58,12 @@ async def run_backtest_endpoint(req: BacktestRequest):
     except Exception as e:
         return {"success": False, "error": str(e)}
 
-    if "error" in result:
-        return {"success": False, "error": result["error"]}
+    train = result.get("train", {})
+    test = result.get("test", {})
 
-    # Serialize time series
+    if "error" in train or "error" in test:
+        return {"success": False, "error": train.get("error") or test.get("error")}
+
     def series_to_list(s):
         if isinstance(s, pd.Series):
             return [
@@ -69,31 +72,24 @@ async def run_backtest_endpoint(req: BacktestRequest):
             ]
         return []
 
+    def metrics(r, beat_bench):
+        return {
+            "total_return": round(float(r.get("rentabilidad_total_port", 0)) * 100, 2),
+            "annualized_return": round(float(r.get("rentabilidad_anual_port", 0)) * 100, 2),
+            "volatility": round(float(r.get("volatilidad_port", 0)) * 100, 2),
+            "sharpe": round(float(r.get("sharpe_realizado", 0)), 3),
+            "sortino": round(float(r.get("sortino_realizado", 0)), 3),
+            "max_drawdown": round(float(r.get("max_drawdown_port", 0)) * 100, 2),
+            "beta": round(float(r.get("beta_realizado", 0)), 3),
+            "alpha": round(float(r.get("alpha_realizado", 0)) * 100, 2),
+            "beat_benchmark": beat_bench,
+        }
+
     return {
         "success": True,
-        "portfolio_series": series_to_list(result.get("serie_port")),
-        "benchmark_series": series_to_list(result.get("serie_bench")),
-        "drawdown_series": series_to_list(result.get("drawdown_series", pd.Series())),
-        "train_metrics": {
-            "total_return": round(float(result.get("rent_train", 0)) * 100, 2),
-            "annualized_return": round(float(result.get("rent_anual_train", 0)) * 100, 2),
-            "volatility": round(float(result.get("vol_train", 0)) * 100, 2),
-            "sharpe": round(float(result.get("sharpe_train", 0)), 3),
-            "sortino": round(float(result.get("sortino_train", 0)), 3),
-            "max_drawdown": round(float(result.get("max_dd_train", 0)) * 100, 2),
-            "beta": round(float(result.get("beta_train", 0)), 3),
-            "alpha": round(float(result.get("alpha_train", 0)) * 100, 2),
-            "beat_benchmark": False,
-        },
-        "test_metrics": {
-            "total_return": round(float(result.get("rent_test", 0)) * 100, 2),
-            "annualized_return": round(float(result.get("rent_anual_test", 0)) * 100, 2),
-            "volatility": round(float(result.get("vol_test", 0)) * 100, 2),
-            "sharpe": round(float(result.get("sharpe_test", 0)), 3),
-            "sortino": round(float(result.get("sortino_test", 0)), 3),
-            "max_drawdown": round(float(result.get("max_dd_test", 0)) * 100, 2),
-            "beta": round(float(result.get("beta_test", 0)), 3),
-            "alpha": round(float(result.get("alpha_test", 0)) * 100, 2),
-            "beat_benchmark": result.get("batio_al_benchmark", False),
-        },
+        "portfolio_series": series_to_list(test.get("serie_port")),
+        "benchmark_series": series_to_list(test.get("serie_bench")),
+        "drawdown_series": [],
+        "train_metrics": metrics(train, train.get("batio_al_benchmark", False)),
+        "test_metrics": metrics(test, test.get("batio_al_benchmark", False)),
     }

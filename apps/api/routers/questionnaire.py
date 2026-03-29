@@ -15,7 +15,7 @@ router = APIRouter(prefix="/api/questionnaire", tags=["questionnaire"])
 
 @router.get("/questions", response_model=QuestionsResponse)
 async def get_questions():
-    """Return all 12 questionnaire questions."""
+    """Return all 15 questionnaire questions."""
     questions = []
     for q in QUESTIONS:
         options = [

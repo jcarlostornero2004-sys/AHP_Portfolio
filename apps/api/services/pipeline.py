@@ -200,7 +200,7 @@ def run_analysis_pipeline(profile: str, use_live: bool = True) -> dict:
         "success": True,
         "profile": profile,
         "profile_description": PROFILE_DESCRIPTIONS[profile],
-        "scores": {k: v for k, v in {}. items()},  # Not available without answers
+        "scores": {},  # Not available without answers; populated by run_full_pipeline
         "top_criteria": top_criteria,
         "ranking": ranking_list,
         "portfolios": portfolios_detail,

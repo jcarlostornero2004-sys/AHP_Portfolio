@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import { useQuery } from "@tanstack/react-query";
@@ -17,6 +17,7 @@ export default function QuestionnairePage() {
   const {
     answers,
     setAnswer,
+    clearAnswers,
     profileResult,
     setProfileResult,
     setAnalysisResult,
@@ -24,16 +25,25 @@ export default function QuestionnairePage() {
     setIsAnalyzing,
   } = useProfileStore();
 
-  const { data: questionsData, isLoading } = useQuery({
+  const { data: questionsData, isLoading, isError } = useQuery({
     queryKey: ["questions"],
     queryFn: getQuestions,
+    retry: 2,
   });
 
   const questions = questionsData?.questions ?? [];
   const currentQuestion = questions[currentQ];
-  const totalQuestions = questions.length || 12;
-  const progress = ((currentQ + 1) / totalQuestions) * 100;
+  const totalQuestions = questions.length;
+  const progress = totalQuestions > 0 ? ((currentQ + 1) / totalQuestions) * 100 : 0;
   const allAnswered = questions.length > 0 && questions.every((q) => answers[q.id]);
+
+  // Clear stale answers when question IDs change (e.g. after a questionnaire update)
+  useEffect(() => {
+    if (questions.length === 0) return;
+    const questionIds = new Set(questions.map((q) => q.id));
+    const hasStale = Object.keys(answers).some((id) => !questionIds.has(id));
+    if (hasStale) clearAnswers();
+  }, [questions]);
 
   const handleSelect = (questionId: string, letter: string) => {
     setAnswer(questionId, letter);
@@ -72,7 +82,26 @@ export default function QuestionnairePage() {
       <div className="min-h-screen flex items-center justify-center bg-bg-primary">
         <div className="flex flex-col items-center gap-4">
           <div className="w-12 h-12 border-4 border-accent-blue border-t-transparent rounded-full animate-spin" />
-          <p className="text-text-secondary">Loading questionnaire...</p>
+          <p className="text-text-secondary">Cargando cuestionario...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (isError) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-bg-primary">
+        <div className="flex flex-col items-center gap-4 text-center px-4">
+          <p className="text-accent-red font-medium">No se pudo conectar con el servidor.</p>
+          <p className="text-text-secondary text-sm">
+            Asegúrate de que el backend está corriendo en el puerto 8000 y recarga la página.
+          </p>
+          <button
+            onClick={() => window.location.reload()}
+            className="mt-2 px-4 py-2 bg-accent-blue text-white rounded-lg text-sm cursor-pointer"
+          >
+            Reintentar
+          </button>
         </div>
       </div>
     );
