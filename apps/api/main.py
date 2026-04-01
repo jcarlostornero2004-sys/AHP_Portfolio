@@ -23,7 +23,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from apps.api.config import settings
-from apps.api.routers import questionnaire, analysis, market, stocks, portfolio, backtest, export
+from apps.api.routers import questionnaire, analysis, market, stocks, portfolio, backtest, export, report
 from apps.api.ws.prices import router as ws_router
 from apps.api.services.market_data import poll_market_data
 from apps.api.services.ws_manager import manager
@@ -68,6 +68,7 @@ app.include_router(stocks.router)
 app.include_router(portfolio.router)
 app.include_router(backtest.router)
 app.include_router(export.router)
+app.include_router(report.router)
 app.include_router(ws_router)
 
 

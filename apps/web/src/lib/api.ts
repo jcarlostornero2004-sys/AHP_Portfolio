@@ -116,3 +116,30 @@ export async function runBacktest(
 export function getExcelDownloadUrl() {
   return `${API_BASE}/api/export/excel`;
 }
+
+// ─── Report ───
+
+export async function downloadWordReport(answers?: Record<string, string>) {
+  const res = await fetch(`${API_BASE}/api/report/word`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ answers: answers ?? {} }),
+  });
+
+  if (!res.ok) {
+    const error = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(error.detail || `Error generating report: ${res.status}`);
+  }
+
+  const blob = await res.blob();
+  const disposition = res.headers.get("content-disposition") || "";
+  const match = disposition.match(/filename="?([^"]+)"?/);
+  const filename = match ? match[1] : "Informe_AHP.docx";
+
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
