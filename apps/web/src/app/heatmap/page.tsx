@@ -43,9 +43,9 @@ export default function HeatmapPage() {
     <AppLayout>
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-2xl font-bold">Market Heatmap</h1>
+          <h1 className="text-2xl font-bold">Mapa de Calor del Mercado</h1>
           <p className="text-text-secondary text-sm mt-1">
-            Stock performance by market cap
+            Rendimiento de acciones por capitalización
           </p>
         </div>
       </div>
@@ -62,7 +62,7 @@ export default function HeatmapPage() {
                 : "bg-bg-secondary text-text-secondary hover:bg-bg-tertiary"
             }`}
           >
-            {idx === "all" ? "All" : INDEX_LABELS[idx] || idx}
+            {idx === "all" ? "Todas" : INDEX_LABELS[idx] || idx}
           </button>
         ))}
       </div>
@@ -70,7 +70,7 @@ export default function HeatmapPage() {
       {/* Heatmap Grid */}
       {isLoading ? (
         <div className="h-[60vh] flex items-center justify-center text-text-secondary">
-          Loading heatmap...
+          Cargando mapa de calor...
         </div>
       ) : (
         <div className="flex flex-wrap gap-1 min-h-[60vh]">

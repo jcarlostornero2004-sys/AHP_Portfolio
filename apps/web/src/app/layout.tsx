@@ -14,8 +14,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "AHP Portfolio Selector",
-  description: "Real-time investor platform with AHP multi-criteria portfolio selection",
+  title: "AHP Portfolio — Selección Multicriterio de Carteras",
+  description: "Plataforma de inversión con selección de cartera mediante el método AHP de análisis multicriterio jerárquico",
 };
 
 export default function RootLayout({
@@ -25,7 +25,7 @@ export default function RootLayout({
 }>) {
   return (
     <html
-      lang="en"
+      lang="es"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased dark`}
     >
       <body className="min-h-full flex flex-col bg-bg-primary text-text-primary">

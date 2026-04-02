@@ -44,7 +44,7 @@ async def run_backtest_endpoint(req: BacktestRequest):
     if not last or "_market_data" not in last:
         raise HTTPException(
             status_code=400,
-            detail="Run the analysis pipeline first before backtesting.",
+            detail="No hay datos de análisis en memoria. Por favor, completa el cuestionario de nuevo para regenerar tu cartera antes de hacer el backtest.",
         )
 
     market_data = last["_market_data"]

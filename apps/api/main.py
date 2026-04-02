@@ -14,11 +14,6 @@ PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-# Also add apps/api itself so "from config import ..." works when run from apps/api/
-API_DIR = os.path.dirname(__file__)
-if API_DIR not in sys.path:
-    sys.path.insert(0, API_DIR)
-
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 

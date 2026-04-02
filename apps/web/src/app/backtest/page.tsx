@@ -24,12 +24,12 @@ export default function BacktestPage() {
     return (
       <AppLayout>
         <div className="flex flex-col items-center justify-center h-[60vh] gap-4">
-          <p className="text-text-secondary text-lg">No analysis results yet.</p>
+          <p className="text-text-secondary text-lg">Todavía no hay resultados de análisis.</p>
           <button
             onClick={() => router.push("/")}
             className="text-accent-blue hover:underline cursor-pointer"
           >
-            Take the questionnaire first
+            Completa primero el cuestionario
           </button>
         </div>
       </AppLayout>
@@ -69,19 +69,19 @@ export default function BacktestPage() {
     <AppLayout>
       <div className="flex items-center justify-between mb-8">
         <div>
-          <h1 className="text-2xl font-bold">Backtesting</h1>
+          <h1 className="text-2xl font-bold">Backtesting Histórico</h1>
           <p className="text-text-secondary text-sm mt-1">
-            Historical performance validation — {winner.name}
+            Validación de rendimiento histórico — {winner.name}
           </p>
         </div>
         <Button onClick={handleRunBacktest} disabled={loading}>
-          {loading ? "Running backtest..." : "Run Backtest"}
+          {loading ? "Ejecutando backtest..." : "Ejecutar Backtest"}
         </Button>
       </div>
 
       {/* Portfolio being tested */}
       <Card className="mb-8">
-        <h3 className="text-sm text-text-secondary uppercase mb-2">Testing Portfolio</h3>
+        <h3 className="text-sm text-text-secondary uppercase mb-2">Cartera en Prueba</h3>
         <div className="flex items-center gap-3 flex-wrap">
           <span className="text-lg font-bold">{winner.name}</span>
           {allocation.map((a) => (
@@ -103,31 +103,31 @@ export default function BacktestPage() {
           {/* Stat Cards */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
             <StatCard
-              label="Test Return"
+              label="Rentabilidad (Test)"
               value={formatPercent(test?.total_return ?? 0)}
-              subtitle="Out-of-sample"
+              subtitle="Fuera de muestra"
               color={(test?.total_return ?? 0) >= 0 ? "green" : "red"}
             />
             <StatCard
-              label="Test Sharpe"
+              label="Sharpe (Test)"
               value={(test?.sharpe ?? 0).toFixed(3)}
               color="blue"
             />
             <StatCard
-              label="Test Max DD"
+              label="Max Drawdown (Test)"
               value={formatPercent(test?.max_drawdown ?? 0)}
               color="red"
             />
             <StatCard
-              label="Beat Benchmark"
-              value={test?.beat_benchmark ? "YES" : "NO"}
+              label="Supera Benchmark"
+              value={test?.beat_benchmark ? "SÍ" : "NO"}
               color={test?.beat_benchmark ? "green" : "red"}
             />
           </div>
 
           {/* Equity Curve */}
           <Card className="mb-8">
-            <h3 className="text-lg font-semibold mb-4">Equity Curve</h3>
+            <h3 className="text-lg font-semibold mb-4">Curva de Capital</h3>
             <EquityCurve
               data={result.portfolio_series}
               benchmarkData={result.benchmark_series}
@@ -136,7 +136,7 @@ export default function BacktestPage() {
             <div className="flex items-center gap-6 mt-3">
               <div className="flex items-center gap-2">
                 <div className="w-4 h-0.5 bg-accent-green" />
-                <span className="text-xs text-text-secondary">Portfolio</span>
+                <span className="text-xs text-text-secondary">Cartera</span>
               </div>
               <div className="flex items-center gap-2">
                 <div className="w-4 h-0.5 bg-text-secondary border-t border-dashed" />
@@ -149,16 +149,16 @@ export default function BacktestPage() {
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             <Card>
               <h3 className="text-lg font-semibold mb-4">
-                Training Period <Badge color="blue">70%</Badge>
+                Periodo de Entrenamiento <Badge color="blue">70%</Badge>
               </h3>
               <div className="space-y-3">
                 {train && (
                   <>
-                    <MetricRow label="Total Return" value={formatPercent(train.total_return)} positive={train.total_return >= 0} />
-                    <MetricRow label="Annualized Return" value={formatPercent(train.annualized_return)} positive={train.annualized_return >= 0} />
-                    <MetricRow label="Volatility" value={formatPercent(train.volatility)} />
-                    <MetricRow label="Sharpe Ratio" value={train.sharpe.toFixed(3)} />
-                    <MetricRow label="Sortino Ratio" value={train.sortino.toFixed(3)} />
+                    <MetricRow label="Retorno Total" value={formatPercent(train.total_return)} positive={train.total_return >= 0} />
+                    <MetricRow label="Retorno Anualizado" value={formatPercent(train.annualized_return)} positive={train.annualized_return >= 0} />
+                    <MetricRow label="Volatilidad" value={formatPercent(train.volatility)} />
+                    <MetricRow label="Ratio de Sharpe" value={train.sharpe.toFixed(3)} />
+                    <MetricRow label="Ratio de Sortino" value={train.sortino.toFixed(3)} />
                     <MetricRow label="Max Drawdown" value={formatPercent(train.max_drawdown)} positive={false} />
                     <MetricRow label="Beta" value={train.beta.toFixed(3)} />
                     <MetricRow label="Alpha" value={formatPercent(train.alpha)} positive={train.alpha >= 0} />
@@ -169,16 +169,16 @@ export default function BacktestPage() {
 
             <Card>
               <h3 className="text-lg font-semibold mb-4">
-                Testing Period <Badge color="gold">30%</Badge>
+                Periodo de Prueba <Badge color="gold">30%</Badge>
               </h3>
               <div className="space-y-3">
                 {test && (
                   <>
-                    <MetricRow label="Total Return" value={formatPercent(test.total_return)} positive={test.total_return >= 0} />
-                    <MetricRow label="Annualized Return" value={formatPercent(test.annualized_return)} positive={test.annualized_return >= 0} />
-                    <MetricRow label="Volatility" value={formatPercent(test.volatility)} />
-                    <MetricRow label="Sharpe Ratio" value={test.sharpe.toFixed(3)} />
-                    <MetricRow label="Sortino Ratio" value={test.sortino.toFixed(3)} />
+                    <MetricRow label="Retorno Total" value={formatPercent(test.total_return)} positive={test.total_return >= 0} />
+                    <MetricRow label="Retorno Anualizado" value={formatPercent(test.annualized_return)} positive={test.annualized_return >= 0} />
+                    <MetricRow label="Volatilidad" value={formatPercent(test.volatility)} />
+                    <MetricRow label="Ratio de Sharpe" value={test.sharpe.toFixed(3)} />
+                    <MetricRow label="Ratio de Sortino" value={test.sortino.toFixed(3)} />
                     <MetricRow label="Max Drawdown" value={formatPercent(test.max_drawdown)} positive={false} />
                     <MetricRow label="Beta" value={test.beta.toFixed(3)} />
                     <MetricRow label="Alpha" value={formatPercent(test.alpha)} positive={test.alpha >= 0} />

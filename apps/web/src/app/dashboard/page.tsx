@@ -18,12 +18,12 @@ export default function DashboardPage() {
     return (
       <AppLayout>
         <div className="flex flex-col items-center justify-center h-[60vh] gap-4">
-          <p className="text-text-secondary text-lg">No analysis results yet.</p>
+          <p className="text-text-secondary text-lg">Todavía no hay resultados de análisis.</p>
           <button
             onClick={() => router.push("/")}
             className="text-accent-blue hover:underline cursor-pointer"
           >
-            Take the questionnaire first
+            Completa primero el cuestionario
           </button>
         </div>
       </AppLayout>
@@ -51,9 +51,9 @@ export default function DashboardPage() {
       {/* Header */}
       <div className="flex items-center justify-between mb-8">
         <div>
-          <h1 className="text-2xl font-bold">Dashboard</h1>
+          <h1 className="text-2xl font-bold">Panel de Control</h1>
           <p className="text-text-secondary text-sm mt-1">
-            Profile:{" "}
+            Perfil:{" "}
             <span style={{ color: profileColor }}>
               {PROFILE_LABELS[profile] || profile}
             </span>
@@ -61,7 +61,7 @@ export default function DashboardPage() {
         </div>
         <div className="flex items-center gap-3">
           <Badge color={is_synthetic ? "gold" : "green"}>
-            {is_synthetic ? "Synthetic Data" : "Live Data"}
+            {is_synthetic ? "Datos Simulados" : "Datos Reales"}
           </Badge>
           <Badge color="blue">CR: {consistency_ratio}</Badge>
         </div>
@@ -70,21 +70,21 @@ export default function DashboardPage() {
       {/* Stat Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 xl:grid-cols-6 gap-4 mb-8">
         <StatCard
-          label="AHP Score"
+          label="Puntuación AHP"
           value={`${winner.score}%`}
-          subtitle={`Winner: ${winner.name}`}
+          subtitle={`Ganadora: ${winner.name}`}
           color="gold"
         />
         <StatCard
-          label="Return"
+          label="Rentabilidad"
           value={formatPercent(winnerPortfolio?.rentabilidad ?? 0)}
-          subtitle="Annualized"
+          subtitle="Anualizada"
           color={(winnerPortfolio?.rentabilidad ?? 0) >= 0 ? "green" : "red"}
         />
         <StatCard
           label="Sharpe"
           value={winnerPortfolio?.sharpe.toFixed(2) ?? "—"}
-          subtitle="Risk-adjusted"
+          subtitle="Ajustada al riesgo"
           color="blue"
         />
         <StatCard
@@ -94,14 +94,14 @@ export default function DashboardPage() {
           color={(winnerPortfolio?.alpha ?? 0) >= 0 ? "green" : "red"}
         />
         <StatCard
-          label="Stocks Analyzed"
+          label="Acciones Analizadas"
           value={String(n_stocks_analyzed)}
-          subtitle={`${n_stocks_selected} selected`}
+          subtitle={`${n_stocks_selected} seleccionadas`}
         />
         <StatCard
           label="Max Drawdown"
           value={formatPercent(winnerPortfolio?.max_drawdown ?? 0)}
-          subtitle="Worst decline"
+          subtitle="Caída máxima"
           color="red"
         />
       </div>
@@ -110,7 +110,7 @@ export default function DashboardPage() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
         {/* AHP Ranking */}
         <Card className="lg:col-span-2">
-          <h3 className="text-lg font-semibold mb-4">AHP Ranking</h3>
+          <h3 className="text-lg font-semibold mb-4">Ranking AHP</h3>
           <div className="space-y-3">
             {ranking.map((entry, i) => (
               <div key={entry.name} className="flex items-center gap-4">
@@ -145,12 +145,12 @@ export default function DashboardPage() {
         {/* Allocation */}
         <Card>
           <h3 className="text-lg font-semibold mb-4">
-            Winner Allocation ({winner.name})
+            Asignación Ganadora ({winner.name})
           </h3>
           {allocation.length > 0 ? (
             <AllocationPie allocation={allocation} />
           ) : (
-            <p className="text-text-secondary text-sm">No allocation data</p>
+            <p className="text-text-secondary text-sm">Sin datos de asignación</p>
           )}
         </Card>
       </div>
@@ -159,7 +159,7 @@ export default function DashboardPage() {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Top Criteria */}
         <Card>
-          <h3 className="text-lg font-semibold mb-4">Top AHP Criteria</h3>
+          <h3 className="text-lg font-semibold mb-4">Criterios AHP Principales</h3>
           <div className="space-y-3">
             {top_criteria.map((c) => (
               <div key={c.name} className="flex items-center gap-3">
@@ -187,15 +187,15 @@ export default function DashboardPage() {
 
         {/* Portfolios Table */}
         <Card>
-          <h3 className="text-lg font-semibold mb-4">Portfolio Candidates</h3>
+          <h3 className="text-lg font-semibold mb-4">Carteras Candidatas</h3>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="text-text-secondary text-xs uppercase">
-                  <th className="text-left pb-3">Name</th>
-                  <th className="text-right pb-3">Return</th>
+                  <th className="text-left pb-3">Nombre</th>
+                  <th className="text-right pb-3">Rentab.</th>
                   <th className="text-right pb-3">Sharpe</th>
-                  <th className="text-right pb-3">Vol</th>
+                  <th className="text-right pb-3">Volat.</th>
                   <th className="text-right pb-3">Beta</th>
                 </tr>
               </thead>
@@ -210,7 +210,7 @@ export default function DashboardPage() {
                     <td className="py-2.5 font-medium">
                       {p.name}
                       {p.name === winner.name && (
-                        <span className="ml-2 text-accent-gold text-xs">Winner</span>
+                        <span className="ml-2 text-accent-gold text-xs">Ganadora</span>
                       )}
                     </td>
                     <td

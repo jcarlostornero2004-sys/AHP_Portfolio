@@ -82,10 +82,7 @@ export default function ReportPage() {
               <p className="text-xl font-bold" style={{ color: profileColor }}>{profileLabel}</p>
               {winner && (
                 <p className="text-sm text-text-secondary mt-0.5">
-                  Activo ganador AHP: <span className="text-text-primary font-medium">{winner.ticker}</span>
-                  {winner.name && winner.name !== winner.ticker && (
-                    <span className="text-text-secondary"> — {winner.name}</span>
-                  )}
+                  Activo ganador AHP: <span className="text-text-primary font-medium">{winner.name}</span>
                 </p>
               )}
             </div>

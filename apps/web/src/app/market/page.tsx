@@ -54,9 +54,9 @@ export default function MarketPage() {
       {/* Header */}
       <div className="flex items-center justify-between mb-8">
         <div>
-          <h1 className="text-2xl font-bold">Market Overview</h1>
+          <h1 className="text-2xl font-bold">Visión del Mercado</h1>
           <p className="text-text-secondary text-sm mt-1">
-            {stocks.length} stocks tracked
+            {stocks.length} acciones monitorizadas
             {marketData?.is_live && (
               <span className="ml-2 inline-flex items-center gap-1">
                 <span className="w-2 h-2 rounded-full bg-accent-green pulse-live" />
@@ -83,25 +83,25 @@ export default function MarketPage() {
 
         {/* Quick stats */}
         <Card>
-          <span className="text-xs text-text-secondary uppercase">Positive Stocks</span>
+          <span className="text-xs text-text-secondary uppercase">Acciones Positivas</span>
           <p className="text-2xl font-bold text-accent-green mt-1">
             {stocks.filter((s) => s.change_1d > 0).length}
           </p>
           <span className="text-xs text-text-secondary">
-            of {stocks.length} total
+            de {stocks.length} total
           </span>
         </Card>
         <Card>
-          <span className="text-xs text-text-secondary uppercase">Negative Stocks</span>
+          <span className="text-xs text-text-secondary uppercase">Acciones Negativas</span>
           <p className="text-2xl font-bold text-accent-red mt-1">
             {stocks.filter((s) => s.change_1d < 0).length}
           </p>
           <span className="text-xs text-text-secondary">
-            of {stocks.length} total
+            de {stocks.length} total
           </span>
         </Card>
         <Card>
-          <span className="text-xs text-text-secondary uppercase">Avg Change</span>
+          <span className="text-xs text-text-secondary uppercase">Cambio Medio</span>
           <p className={`text-2xl font-bold mt-1 ${
             (sentiment?.components?.avg_daily_change ?? 0) >= 0
               ? "text-accent-green"
@@ -109,7 +109,7 @@ export default function MarketPage() {
           }`}>
             {formatPercent(sentiment?.components?.avg_daily_change ?? 0)}
           </p>
-          <span className="text-xs text-text-secondary">Today</span>
+          <span className="text-xs text-text-secondary">Hoy</span>
         </Card>
       </div>
 
@@ -125,7 +125,7 @@ export default function MarketPage() {
                 : "bg-bg-secondary text-text-secondary hover:bg-bg-tertiary"
             }`}
           >
-            {idx === "all" ? "All" : INDEX_LABELS[idx] || idx}
+            {idx === "all" ? "Todas" : INDEX_LABELS[idx] || idx}
           </button>
         ))}
       </div>
@@ -133,7 +133,7 @@ export default function MarketPage() {
       {/* Stock Table */}
       <Card className="overflow-hidden p-0">
         {isLoading ? (
-          <div className="p-8 text-center text-text-secondary">Loading market data...</div>
+          <div className="p-8 text-center text-text-secondary">Cargando datos de mercado...</div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
@@ -145,7 +145,7 @@ export default function MarketPage() {
                     className="text-right px-4 py-3 cursor-pointer hover:text-text-primary"
                     onClick={() => handleSort("price")}
                   >
-                    Price {sortBy === "price" && (sortDir === "desc" ? "↓" : "↑")}
+                    Precio {sortBy === "price" && (sortDir === "desc" ? "↓" : "↑")}
                   </th>
                   <th
                     className="text-right px-4 py-3 cursor-pointer hover:text-text-primary"
@@ -159,9 +159,9 @@ export default function MarketPage() {
                   >
                     7d % {sortBy === "change_7d" && (sortDir === "desc" ? "↓" : "↑")}
                   </th>
-                  <th className="text-center px-4 py-3">7d Chart</th>
-                  <th className="text-right px-4 py-3">Market Cap</th>
-                  <th className="text-right px-4 py-3">Index</th>
+                  <th className="text-center px-4 py-3">Gráfico 7d</th>
+                  <th className="text-right px-4 py-3">Cap. Bursátil</th>
+                  <th className="text-right px-4 py-3">Índice</th>
                 </tr>
               </thead>
               <tbody>

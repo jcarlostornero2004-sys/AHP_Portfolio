@@ -14,6 +14,7 @@ export default function QuestionnairePage() {
   const router = useRouter();
   const [currentQ, setCurrentQ] = useState(0);
   const [showReveal, setShowReveal] = useState(false);
+  const [syntheticFallback, setSyntheticFallback] = useState(false);
   const {
     answers,
     setAnswer,
@@ -43,6 +44,7 @@ export default function QuestionnairePage() {
     const questionIds = new Set(questions.map((q) => q.id));
     const hasStale = Object.keys(answers).some((id) => !questionIds.has(id));
     if (hasStale) clearAnswers();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [questions]);
 
   const handleSelect = (questionId: string, letter: string) => {
@@ -63,8 +65,14 @@ export default function QuestionnairePage() {
         const analysis = await runAnalysis(result.profile, true);
         setAnalysisResult(analysis);
       } catch {
-        const analysis = await runAnalysis(result.profile, false);
-        setAnalysisResult(analysis);
+        try {
+          const analysis = await runAnalysis(result.profile, false);
+          setAnalysisResult(analysis);
+          // Marca que se usaron datos sintéticos para mostrar aviso
+          setSyntheticFallback(true);
+        } catch (err) {
+          console.error("Error en análisis:", err);
+        }
       } finally {
         setIsAnalyzing(false);
       }
@@ -128,7 +136,7 @@ export default function QuestionnairePage() {
               transition={{ delay: 0.3 }}
             >
               <p className="text-sm text-text-secondary uppercase tracking-widest mb-2">
-                Your Investor Profile
+                Tu Perfil de Inversor
               </p>
               <h1
                 className="text-5xl font-bold mb-4"
@@ -170,12 +178,12 @@ export default function QuestionnairePage() {
                 <div className="flex flex-col items-center gap-3">
                   <div className="w-8 h-8 border-3 border-accent-blue border-t-transparent rounded-full animate-spin" />
                   <p className="text-sm text-text-secondary">
-                    Analyzing markets and building your portfolio...
+                    Analizando mercados y construyendo tu cartera...
                   </p>
                 </div>
               ) : (
                 <Button size="lg" onClick={handleGoToDashboard}>
-                  View Your Dashboard
+                  Ver mi Dashboard
                 </Button>
               )}
             </motion.div>
@@ -212,6 +220,12 @@ export default function QuestionnairePage() {
               <h2 className="text-xl font-semibold mb-6 leading-relaxed">
                 {currentQuestion.text}
               </h2>
+
+              {syntheticFallback && (
+                <div className="mb-4 px-4 py-3 rounded-lg bg-yellow-500/10 border border-yellow-500/30 text-yellow-400 text-sm">
+                  ⚠ No se pudieron obtener datos reales de mercado. El análisis se ha realizado con datos simulados.
+                </div>
+              )}
 
               <div className="space-y-3">
                 {currentQuestion.options.map((opt) => {
@@ -250,7 +264,7 @@ export default function QuestionnairePage() {
             onClick={() => setCurrentQ(Math.max(0, currentQ - 1))}
             disabled={currentQ === 0}
           >
-            Previous
+            Anterior
           </Button>
 
           {currentQ < totalQuestions - 1 ? (
@@ -258,11 +272,11 @@ export default function QuestionnairePage() {
               onClick={() => setCurrentQ(currentQ + 1)}
               disabled={!answers[currentQuestion?.id]}
             >
-              Next
+              Siguiente
             </Button>
           ) : (
             <Button onClick={handleSubmit} disabled={!allAnswered || isAnalyzing}>
-              {isAnalyzing ? "Analyzing..." : "See Results"}
+              {isAnalyzing ? "Analizando..." : "Ver Resultados"}
             </Button>
           )}
         </div>
