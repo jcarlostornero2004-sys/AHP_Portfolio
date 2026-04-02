@@ -19,9 +19,12 @@ async def analyze(req: AnalysisRequest):
     """Run the full AHP pipeline for a given profile."""
     global _last_result
 
-    result = await asyncio.to_thread(
-        run_analysis_pipeline, req.profile, req.use_live
-    )
+    try:
+        result = await asyncio.to_thread(
+            run_analysis_pipeline, req.profile, req.use_live
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Error en el pipeline: {exc}")
 
     if not result.get("success"):
         raise HTTPException(status_code=400, detail=result.get("error", "Pipeline failed"))
@@ -38,9 +41,12 @@ async def analyze_full(req: QuestionnaireSubmitRequest):
     """Run the full pipeline from questionnaire answers (combines submit + analyze)."""
     global _last_result
 
-    result = await asyncio.to_thread(
-        run_full_pipeline, req.answers, True
-    )
+    try:
+        result = await asyncio.to_thread(
+            run_full_pipeline, req.answers, True
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Error en el pipeline: {exc}")
 
     if not result.get("success"):
         raise HTTPException(status_code=400, detail=result.get("error", "Pipeline failed"))

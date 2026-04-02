@@ -15,6 +15,8 @@ export default function QuestionnairePage() {
   const [currentQ, setCurrentQ] = useState(0);
   const [showReveal, setShowReveal] = useState(false);
   const [syntheticFallback, setSyntheticFallback] = useState(false);
+  const [analysisError, setAnalysisError] = useState<string | null>(null);
+  const [submitError, setSubmitError] = useState<string | null>(null);
   const {
     answers,
     setAnswer,
@@ -55,29 +57,35 @@ export default function QuestionnairePage() {
   };
 
   const handleSubmit = async () => {
-    try {
-      const result = await submitQuestionnaire(answers);
-      setProfileResult(result);
-      setShowReveal(true);
+    setSubmitError(null);
+    setAnalysisError(null);
+    setSyntheticFallback(false);
 
-      setIsAnalyzing(true);
+    let profileRes;
+    try {
+      profileRes = await submitQuestionnaire(answers);
+    } catch (err) {
+      setSubmitError(err instanceof Error ? err.message : "Error al procesar el cuestionario.");
+      return;
+    }
+
+    setProfileResult(profileRes);
+    setShowReveal(true);
+    setIsAnalyzing(true);
+
+    try {
+      const analysis = await runAnalysis(profileRes.profile, true);
+      setAnalysisResult(analysis);
+    } catch {
       try {
-        const analysis = await runAnalysis(result.profile, true);
+        const analysis = await runAnalysis(profileRes.profile, false);
         setAnalysisResult(analysis);
-      } catch {
-        try {
-          const analysis = await runAnalysis(result.profile, false);
-          setAnalysisResult(analysis);
-          // Marca que se usaron datos sintéticos para mostrar aviso
-          setSyntheticFallback(true);
-        } catch (err) {
-          console.error("Error en análisis:", err);
-        }
-      } finally {
-        setIsAnalyzing(false);
+        setSyntheticFallback(true);
+      } catch (err) {
+        setAnalysisError(err instanceof Error ? err.message : "No se pudo construir la cartera.");
       }
-    } catch (error) {
-      console.error("Error submitting:", error);
+    } finally {
+      setIsAnalyzing(false);
     }
   };
 
@@ -174,6 +182,18 @@ export default function QuestionnairePage() {
                   ))}
               </div>
 
+              {syntheticFallback && !analysisError && (
+                <div className="mb-4 px-4 py-3 rounded-lg bg-yellow-500/10 border border-yellow-500/30 text-yellow-400 text-sm text-left">
+                  ⚠ Datos reales no disponibles. Análisis realizado con datos simulados.
+                </div>
+              )}
+              {analysisError && (
+                <div className="mb-4 px-4 py-3 rounded-lg bg-red-500/10 border border-red-500/30 text-red-400 text-sm text-left">
+                  ✕ {analysisError}
+                  <p className="mt-1 text-xs opacity-80">Vuelve al cuestionario e inténtalo de nuevo.</p>
+                </div>
+              )}
+
               {isAnalyzing ? (
                 <div className="flex flex-col items-center gap-3">
                   <div className="w-8 h-8 border-3 border-accent-blue border-t-transparent rounded-full animate-spin" />
@@ -181,6 +201,10 @@ export default function QuestionnairePage() {
                     Analizando mercados y construyendo tu cartera...
                   </p>
                 </div>
+              ) : analysisError ? (
+                <Button size="lg" variant="ghost" onClick={() => { setShowReveal(false); setAnalysisError(null); }}>
+                  Volver al cuestionario
+                </Button>
               ) : (
                 <Button size="lg" onClick={handleGoToDashboard}>
                   Ver mi Dashboard
@@ -220,12 +244,6 @@ export default function QuestionnairePage() {
               <h2 className="text-xl font-semibold mb-6 leading-relaxed">
                 {currentQuestion.text}
               </h2>
-
-              {syntheticFallback && (
-                <div className="mb-4 px-4 py-3 rounded-lg bg-yellow-500/10 border border-yellow-500/30 text-yellow-400 text-sm">
-                  ⚠ No se pudieron obtener datos reales de mercado. El análisis se ha realizado con datos simulados.
-                </div>
-              )}
 
               <div className="space-y-3">
                 {currentQuestion.options.map((opt) => {
@@ -275,9 +293,14 @@ export default function QuestionnairePage() {
               Siguiente
             </Button>
           ) : (
-            <Button onClick={handleSubmit} disabled={!allAnswered || isAnalyzing}>
-              {isAnalyzing ? "Analizando..." : "Ver Resultados"}
-            </Button>
+            <div className="flex flex-col items-end gap-2">
+              {submitError && (
+                <p className="text-xs text-red-400 text-right max-w-xs">{submitError}</p>
+              )}
+              <Button onClick={handleSubmit} disabled={!allAnswered || isAnalyzing}>
+                {isAnalyzing ? "Analizando..." : "Ver Resultados"}
+              </Button>
+            </div>
           )}
         </div>
       </div>
