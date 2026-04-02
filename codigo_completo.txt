@@ -1,0 +1,5224 @@
+# Código de la Aplicación (AHP Portfolio)
+
+A continuación se presenta el código completo de la aplicación (Frontend en Next.js y Backend en Python FastAPI).
+
+
+================================================================================
+File: apps\api\config.py
+================================================================================
+
+```python
+"""
+FastAPI application configuration.
+"""
+
+from pydantic_settings import BaseSettings
+
+
+class Settings(BaseSettings):
+    app_name: str = "AHP Portfolio Selector"
+    debug: bool = False
+    cors_origins: list[str] = ["http://localhost:3000", "http://localhost:3001"]
+
+    # Data settings
+    default_period_years: int = 2
+    max_stocks_per_index: int = 50
+
+    # WebSocket settings
+    ws_poll_interval_seconds: int = 30
+
+    # Cache TTL (seconds)
+    market_cache_ttl: int = 60
+    analysis_cache_ttl: int = 300
+
+    class Config:
+        env_prefix = "AHP_"
+
+
+settings = Settings()
+```
+
+
+================================================================================
+File: apps\api\main.py
+================================================================================
+
+```python
+"""
+FastAPI application — AHP Portfolio Selector API.
+"""
+
+import sys
+import os
+import asyncio
+from contextlib import asynccontextmanager
+
+# Ensure project root is in Python path for module imports
+# Works both when run from project root (python -m apps.api.main) and
+# from apps/api/ directory (uvicorn main:app)
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
+# Also add apps/api itself so "from config import ..." works when run from apps/api/
+API_DIR = os.path.dirname(__file__)
+if API_DIR not in sys.path:
+    sys.path.insert(0, API_DIR)
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+from apps.api.config import settings
+from apps.api.routers import questionnaire, analysis, market, stocks, portfolio, backtest, export, report
+from apps.api.ws.prices import router as ws_router
+from apps.api.services.market_data import poll_market_data
+from apps.api.services.ws_manager import manager
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Application lifespan: start background tasks."""
+    # Start background market data polling
+    poll_task = asyncio.create_task(poll_market_data())
+    print(f"[AHP API] Background market polling started (every {settings.ws_poll_interval_seconds}s)")
+    yield
+    # Cleanup
+    poll_task.cancel()
+    try:
+        await poll_task
+    except asyncio.CancelledError:
+        pass
+
+
+app = FastAPI(
+    title=settings.app_name,
+    description="Real-time investor platform with AHP multi-criteria portfolio selection",
+    version="2.0.0",
+    lifespan=lifespan,
+)
+
+# CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.cors_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Register routers
+app.include_router(questionnaire.router)
+app.include_router(analysis.router)
+app.include_router(market.router)
+app.include_router(stocks.router)
+app.include_router(portfolio.router)
+app.include_router(backtest.router)
+app.include_router(export.router)
+app.include_router(report.router)
+app.include_router(ws_router)
+
+
+@app.get("/")
+async def root():
+    return {
+        "name": settings.app_name,
+        "version": "2.0.0",
+        "docs": "/docs",
+        "endpoints": {
+            "questionnaire": "/api/questionnaire/questions",
+            "analyze": "/api/analyze",
+            "market": "/api/market/overview",
+            "heatmap": "/api/market/heatmap",
+            "sentiment": "/api/market/sentiment",
+            "portfolio": "/api/portfolio/results",
+            "backtest": "/api/backtest",
+            "websocket": "/ws/prices",
+        },
+    }
+
+
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(
+        "apps.api.main:app",
+        host="0.0.0.0",
+        port=8000,
+        reload=True,
+    )
+```
+
+
+================================================================================
+File: apps\api\models\schemas.py
+================================================================================
+
+```python
+"""
+Pydantic schemas for API request/response models.
+"""
+
+from pydantic import BaseModel, Field
+from typing import Optional
+
+
+# ─── Questionnaire ───
+
+class QuestionOption(BaseModel):
+    letter: str
+    text: str
+    scores: dict[str, int]
+
+
+class Question(BaseModel):
+    id: str
+    text: str
+    options: list[QuestionOption]
+
+
+class QuestionsResponse(BaseModel):
+    questions: list[Question]
+    total: int
+
+
+class QuestionnaireSubmitRequest(BaseModel):
+    answers: dict[str, str] = Field(
+        ..., description="Map of question_id to answer letter (a/b/c/d)"
+    )
+
+
+class ProfileResult(BaseModel):
+    profile: str
+    description: str
+    scores: dict[str, int]
+
+
+# ─── Analysis ───
+
+class AnalysisRequest(BaseModel):
+    profile: str
+    use_live: bool = True
+
+
+class CriterionInfo(BaseModel):
+    name: str
+    weight: int
+    direction: str
+
+
+class RankingEntry(BaseModel):
+    name: str
+    score: float
+    rank: int
+
+
+class PortfolioDetail(BaseModel):
+    name: str
+    rentabilidad: float
+    volatilidad: float
+    sharpe: float
+    max_drawdown: float
+    beta: float
+    alpha: float
+    tickers: str
+    pesos: str
+
+
+class StockInfo(BaseModel):
+    ticker: str
+    rentabilidad: float
+    sharpe: float
+    volatilidad: float
+    beta: float
+
+
+class AllocationEntry(BaseModel):
+    ticker: str
+    weight: str
+
+
+class AnalysisResponse(BaseModel):
+    success: bool
+    profile: str
+    profile_description: str
+    scores: dict[str, int]
+    top_criteria: list[CriterionInfo]
+    ranking: list[RankingEntry]
+    portfolios: list[PortfolioDetail]
+    stocks: list[StockInfo]
+    winner: RankingEntry
+    allocation: list[AllocationEntry]
+    n_stocks_analyzed: int
+    n_stocks_selected: int
+    consistency_ratio: float
+    is_synthetic: bool
+
+
+class ErrorResponse(BaseModel):
+    success: bool = False
+    error: str
+
+
+# ─── Market ───
+
+class MarketStockEntry(BaseModel):
+    ticker: str
+    name: str = ""
+    price: float
+    change_1d: float = 0.0
+    change_7d: float = 0.0
+    market_cap: Optional[float] = None
+    volume: Optional[int] = None
+    sector: str = ""
+    index: str = ""
+    sparkline: list[float] = []
+
+
+class MarketOverviewResponse(BaseModel):
+    stocks: list[MarketStockEntry]
+    last_updated: str
+    is_live: bool
+
+
+class HeatmapEntry(BaseModel):
+    ticker: str
+    name: str = ""
+    sector: str
+    market_cap: float
+    daily_change: float
+    index: str
+
+
+class HeatmapResponse(BaseModel):
+    entries: list[HeatmapEntry]
+    last_updated: str
+
+
+class SentimentResponse(BaseModel):
+    fear_greed_index: int = Field(..., ge=0, le=100)
+    label: str  # "Extreme Fear", "Fear", "Neutral", "Greed", "Extreme Greed"
+    components: dict[str, float]
+
+
+# ─── Stocks ───
+
+class StockDetailResponse(BaseModel):
+    ticker: str
+    name: str = ""
+    sector: str = ""
+    index: str = ""
+    price: float = 0.0
+    change_1d: float = 0.0
+    indicators: dict[str, float] = {}
+    history: list[dict] = []
+
+
+class StockHistoryResponse(BaseModel):
+    ticker: str
+    data: list[dict]  # [{date, open, high, low, close, volume}]
+
+
+# ─── Backtest ───
+
+class BacktestRequest(BaseModel):
+    tickers: list[str]
+    weights: dict[str, float]
+    profile: str
+    train_ratio: float = 0.7
+
+
+class BacktestMetrics(BaseModel):
+    total_return: float
+    annualized_return: float
+    volatility: float
+    sharpe: float
+    sortino: float
+    max_drawdown: float
+    beta: float
+    alpha: float
+    beat_benchmark: bool
+
+
+class BacktestResponse(BaseModel):
+    success: bool
+    portfolio_series: list[dict] = []  # [{date, value}]
+    benchmark_series: list[dict] = []
+    drawdown_series: list[dict] = []
+    train_metrics: Optional[BacktestMetrics] = None
+    test_metrics: Optional[BacktestMetrics] = None
+    error: Optional[str] = None
+
+
+# ─── Profiles ───
+
+class ProfileWeights(BaseModel):
+    profile: str
+    description: str
+    weights: dict[str, int]
+    filters: dict
+
+
+class ProfilesListResponse(BaseModel):
+    profiles: list[ProfileWeights]
+```
+
+
+================================================================================
+File: apps\api\models\__init__.py
+================================================================================
+
+```python
+
+```
+
+
+================================================================================
+File: apps\api\requirements.txt
+================================================================================
+
+```txt
+# FastAPI backend
+fastapi>=0.110.0
+uvicorn[standard]>=0.27.0
+websockets>=12.0
+pydantic>=2.5.0
+pydantic-settings>=2.1.0
+
+# Existing dependencies
+yfinance>=0.2.31
+scipy>=1.11.0
+numpy>=1.24.0
+pandas>=2.0.0
+openpyxl>=3.1.0
+python-docx>=1.1.0
+```
+
+
+================================================================================
+File: apps\api\routers\analysis.py
+================================================================================
+
+```python
+"""
+Analysis API router — runs the full AHP pipeline.
+"""
+
+import asyncio
+from fastapi import APIRouter, HTTPException
+
+from apps.api.models.schemas import AnalysisRequest, QuestionnaireSubmitRequest
+from apps.api.services.pipeline import run_analysis_pipeline, run_full_pipeline
+
+router = APIRouter(prefix="/api", tags=["analysis"])
+
+# In-memory cache for last pipeline result
+_last_result: dict = {}
+
+
+@router.post("/analyze")
+async def analyze(req: AnalysisRequest):
+    """Run the full AHP pipeline for a given profile."""
+    global _last_result
+
+    result = await asyncio.to_thread(
+        run_analysis_pipeline, req.profile, req.use_live
+    )
+
+    if not result.get("success"):
+        raise HTTPException(status_code=400, detail=result.get("error", "Pipeline failed"))
+
+    _last_result = result
+
+    # Strip internal data before returning
+    response = {k: v for k, v in result.items() if not k.startswith("_")}
+    return response
+
+
+@router.post("/analyze/full")
+async def analyze_full(req: QuestionnaireSubmitRequest):
+    """Run the full pipeline from questionnaire answers (combines submit + analyze)."""
+    global _last_result
+
+    result = await asyncio.to_thread(
+        run_full_pipeline, req.answers, True
+    )
+
+    if not result.get("success"):
+        raise HTTPException(status_code=400, detail=result.get("error", "Pipeline failed"))
+
+    _last_result = result
+
+    response = {k: v for k, v in result.items() if not k.startswith("_")}
+    return response
+
+
+def get_last_result() -> dict:
+    """Access the last pipeline result (used by other routers)."""
+    return _last_result
+```
+
+
+================================================================================
+File: apps\api\routers\backtest.py
+================================================================================
+
+```python
+"""
+Backtest API router.
+"""
+
+import asyncio
+import numpy as np
+import pandas as pd
+from fastapi import APIRouter, HTTPException
+
+from apps.api.models.schemas import BacktestRequest
+from apps.api.routers.analysis import get_last_result
+
+router = APIRouter(prefix="/api/backtest", tags=["backtest"])
+
+
+def _run_backtest(tickers, weights, market_data, rf_annual, train_ratio):
+    """Run backtest synchronously, computing metrics for both train and test periods."""
+    from modules.backtester import split_data, compute_portfolio_performance
+
+    first_idx = market_data["metadata"]["indices"][0]
+    bench_series = market_data["benchmarks"][first_idx]
+
+    all_prices = pd.concat(
+        [market_data["prices"][idx] for idx in market_data["metadata"]["indices"]],
+        axis=1,
+    )
+
+    prices_train, prices_test = split_data(all_prices, train_ratio)
+    bench_df = bench_series.to_frame()
+    bench_train_df, bench_test_df = split_data(bench_df, train_ratio)
+    bench_train = bench_train_df.iloc[:, 0]
+    bench_test = bench_test_df.iloc[:, 0]
+
+    train = compute_portfolio_performance(prices_train, tickers, weights, bench_train, rf_annual)
+    test = compute_portfolio_performance(prices_test, tickers, weights, bench_test, rf_annual)
+
+    return {"train": train, "test": test}
+
+
+@router.post("")
+async def run_backtest_endpoint(req: BacktestRequest):
+    """Run backtesting on a portfolio."""
+    last = get_last_result()
+    if not last or "_market_data" not in last:
+        raise HTTPException(
+            status_code=400,
+            detail="Run the analysis pipeline first before backtesting.",
+        )
+
+    market_data = last["_market_data"]
+    avg_rf = np.mean(list(market_data["risk_free"].values()))
+
+    try:
+        result = await asyncio.to_thread(
+            _run_backtest, req.tickers, req.weights,
+            market_data, avg_rf, req.train_ratio,
+        )
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+    train = result.get("train", {})
+    test = result.get("test", {})
+
+    if "error" in train or "error" in test:
+        return {"success": False, "error": train.get("error") or test.get("error")}
+
+    def series_to_list(s):
+        if isinstance(s, pd.Series):
+            return [
+                {"date": d.strftime("%Y-%m-%d"), "value": round(float(v), 4)}
+                for d, v in s.items()
+            ]
+        return []
+
+    def metrics(r, beat_bench):
+        return {
+            "total_return": round(float(r.get("rentabilidad_total_port", 0)) * 100, 2),
+            "annualized_return": round(float(r.get("rentabilidad_anual_port", 0)) * 100, 2),
+            "volatility": round(float(r.get("volatilidad_port", 0)) * 100, 2),
+            "sharpe": round(float(r.get("sharpe_realizado", 0)), 3),
+            "sortino": round(float(r.get("sortino_realizado", 0)), 3),
+            "max_drawdown": round(float(r.get("max_drawdown_port", 0)) * 100, 2),
+            "beta": round(float(r.get("beta_realizado", 0)), 3),
+            "alpha": round(float(r.get("alpha_realizado", 0)) * 100, 2),
+            "beat_benchmark": beat_bench,
+        }
+
+    return {
+        "success": True,
+        "portfolio_series": series_to_list(test.get("serie_port")),
+        "benchmark_series": series_to_list(test.get("serie_bench")),
+        "drawdown_series": [],
+        "train_metrics": metrics(train, train.get("batio_al_benchmark", False)),
+        "test_metrics": metrics(test, test.get("batio_al_benchmark", False)),
+    }
+```
+
+
+================================================================================
+File: apps\api\routers\export.py
+================================================================================
+
+```python
+"""
+Export API router — Excel and Word report downloads.
+"""
+
+import tempfile
+from datetime import datetime
+from fastapi import APIRouter, HTTPException
+from fastapi.responses import FileResponse
+
+from apps.api.routers.analysis import get_last_result
+
+router = APIRouter(prefix="/api/export", tags=["export"])
+
+
+@router.get("/excel")
+async def export_excel():
+    """Generate and download Excel report."""
+    last = get_last_result()
+    if not last or "_engine" not in last:
+        raise HTTPException(status_code=400, detail="Run analysis first.")
+
+    try:
+        from modules.excel_export import export_to_excel
+        from modules.profiles import get_profile_config
+
+        profile = last["profile"]
+        config = get_profile_config(profile)
+
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx")
+        export_to_excel(
+            profile=profile,
+            filters=config["filters"],
+            portfolios=last["_best_portfolios"],
+            ranking=last["_ranking"],
+            ahp_report=last["_engine"].get_full_report(),
+            analysis=last["_consolidated"],
+            filename=tmp.name,
+            progress=False,
+        )
+
+        return FileResponse(
+            tmp.name,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            filename=f"AHP_Portfolio_{profile}_{datetime.now().strftime('%Y%m%d')}.xlsx",
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+```
+
+
+================================================================================
+File: apps\api\routers\market.py
+================================================================================
+
+```python
+"""
+Market data API router — overview, heatmap, sentiment.
+"""
+
+from fastapi import APIRouter
+from apps.api.services.market_data import get_market_overview, get_heatmap_data, get_sentiment
+
+router = APIRouter(prefix="/api/market", tags=["market"])
+
+
+@router.get("/overview")
+async def market_overview():
+    """Return current stock prices and changes for all tracked tickers."""
+    return get_market_overview()
+
+
+@router.get("/heatmap")
+async def market_heatmap():
+    """Return sector-grouped stock data for treemap visualization."""
+    return get_heatmap_data()
+
+
+@router.get("/sentiment")
+async def market_sentiment():
+    """Return computed fear/greed index."""
+    return get_sentiment()
+```
+
+
+================================================================================
+File: apps\api\routers\portfolio.py
+================================================================================
+
+```python
+"""
+Portfolio API router — cached pipeline results.
+"""
+
+from fastapi import APIRouter, HTTPException
+from apps.api.routers.analysis import get_last_result
+
+router = APIRouter(prefix="/api/portfolio", tags=["portfolio"])
+
+
+@router.get("/results")
+async def portfolio_results():
+    """Return the most recent pipeline results."""
+    result = get_last_result()
+    if not result:
+        raise HTTPException(
+            status_code=404,
+            detail="No analysis results available. Run the questionnaire first.",
+        )
+
+    response = {k: v for k, v in result.items() if not k.startswith("_")}
+    return response
+```
+
+
+================================================================================
+File: apps\api\routers\questionnaire.py
+================================================================================
+
+```python
+"""
+Questionnaire API router.
+"""
+
+from fastapi import APIRouter
+
+from modules.questionnaire import QUESTIONS, PROFILE_DESCRIPTIONS, score_answers
+from apps.api.models.schemas import (
+    QuestionsResponse, Question, QuestionOption,
+    QuestionnaireSubmitRequest, ProfileResult,
+)
+
+router = APIRouter(prefix="/api/questionnaire", tags=["questionnaire"])
+
+
+@router.get("/questions", response_model=QuestionsResponse)
+async def get_questions():
+    """Return all 15 questionnaire questions."""
+    questions = []
+    for q in QUESTIONS:
+        options = [
+            QuestionOption(letter=letra, text=texto, scores=puntos)
+            for letra, texto, puntos in q["opciones"]
+        ]
+        questions.append(Question(id=q["id"], text=q["texto"], options=options))
+
+    return QuestionsResponse(questions=questions, total=len(questions))
+
+
+@router.post("/submit", response_model=ProfileResult)
+async def submit_questionnaire(req: QuestionnaireSubmitRequest):
+    """Score questionnaire answers and return investor profile."""
+    profile, scores = score_answers(req.answers)
+
+    return ProfileResult(
+        profile=profile,
+        description=PROFILE_DESCRIPTIONS[profile],
+        scores={k: v for k, v in scores.items() if v > 0},
+    )
+```
+
+
+================================================================================
+File: apps\api\routers\report.py
+================================================================================
+
+```python
+"""
+Word Report API router.
+Generates a detailed step-by-step investment methodology report.
+"""
+
+import tempfile
+from datetime import datetime
+from fastapi import APIRouter, HTTPException
+from fastapi.responses import FileResponse
+from pydantic import BaseModel
+from typing import Optional
+
+from apps.api.routers.analysis import get_last_result
+
+router = APIRouter(prefix="/api/report", tags=["report"])
+
+
+class ReportRequest(BaseModel):
+    answers: Optional[dict[str, str]] = None
+
+
+@router.post("/word")
+async def generate_word_report(req: ReportRequest = ReportRequest()):
+    """Generate a detailed Word methodology report for the current portfolio."""
+    last = get_last_result()
+    if not last or "profile" not in last:
+        raise HTTPException(
+            status_code=400,
+            detail="Ejecuta el análisis primero antes de generar el informe.",
+        )
+    try:
+        report_path = _build_word_report(last, req.answers or {})
+        profile = last["profile"]
+        filename = f"Informe_AHP_{profile}_{datetime.now().strftime('%Y%m%d_%H%M')}.docx"
+        return FileResponse(
+            report_path,
+            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            filename=filename,
+        )
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ─────────────────────────────────────────────────────────
+# Document builder
+# ─────────────────────────────────────────────────────────
+
+def _build_word_report(data: dict, answers: dict) -> str:
+    from docx import Document
+    from docx.shared import Pt, RGBColor, Inches
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.oxml.ns import qn
+    from docx.oxml import OxmlElement
+
+    doc = Document()
+
+    # ── Page layout (A4) ──────────────────────────────────
+    sec = doc.sections[0]
+    sec.page_width  = Inches(8.27)
+    sec.page_height = Inches(11.69)
+    for attr in ("left_margin", "right_margin", "top_margin", "bottom_margin"):
+        setattr(sec, attr, Inches(1.1))
+
+    doc.styles["Normal"].font.name = "Calibri"
+    doc.styles["Normal"].font.size = Pt(10.5)
+    doc.styles["Normal"].paragraph_format.space_after = Pt(5)
+
+    # ── Color palette ────────────────────────────────────
+    DARK  = RGBColor(0x1F, 0x2D, 0x3D)
+    BLUE  = RGBColor(0x18, 0x5F, 0xA5)
+    GOLD  = RGBColor(0xC8, 0xA0, 0x00)
+    GRAY  = RGBColor(0x6C, 0x75, 0x7D)
+    WHITE = RGBColor(0xFF, 0xFF, 0xFF)
+    GREEN = RGBColor(0x1D, 0x6A, 0x3A)
+    RED   = RGBColor(0xB0, 0x30, 0x20)
+
+    PROFILE_COLORS = {
+        "conservador": RGBColor(0x1A, 0x56, 0x9A),
+        "moderado":    RGBColor(0x1A, 0x6A, 0x3E),
+        "agresivo":    RGBColor(0xBF, 0x60, 0x00),
+    }
+
+    # ── Data extraction ──────────────────────────────────
+    profile       = data.get("profile", "moderado")
+    profile_label = profile.replace("_", " ").capitalize()
+    P_CLR         = PROFILE_COLORS.get(profile, BLUE)
+    winner        = data.get("winner", {})
+    allocation    = data.get("allocation", [])
+    ranking       = data.get("ranking", [])
+    portfolios    = data.get("portfolios", [])
+    stocks        = data.get("stocks", [])
+    top_criteria  = data.get("top_criteria", [])
+    scores        = data.get("scores", {})
+    n_analyzed    = data.get("n_stocks_analyzed", 0)
+    n_selected    = data.get("n_stocks_selected", 0)
+    cr            = data.get("consistency_ratio", 0)
+    is_synthetic  = data.get("is_synthetic", True)
+    profile_desc  = data.get("profile_description", "")
+    today         = datetime.now().strftime("%d de %B de %Y")
+    winner_port   = next((p for p in portfolios if p.get("name") == winner.get("name")), {})
+
+    # ── Helpers ──────────────────────────────────────────
+    def cell_bg(cell, r, g, b):
+        tc   = cell._tc
+        tcPr = tc.get_or_add_tcPr()
+        shd  = OxmlElement("w:shd")
+        shd.set(qn("w:fill"), f"{r:02X}{g:02X}{b:02X}")
+        shd.set(qn("w:val"), "clear")
+        tcPr.append(shd)
+
+    def thead(table, cols, r=0x18, g=0x5F, b=0xA5):
+        row = table.rows[0]
+        for i, txt in enumerate(cols):
+            cell = row.cells[i]
+            cell.text = ""
+            run  = cell.paragraphs[0].add_run(txt)
+            run.font.bold  = True
+            run.font.color.rgb = WHITE
+            run.font.size  = Pt(9)
+            cell.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+            cell_bg(cell, r, g, b)
+
+    def trow(row, vals, alt=False, center=False, bold=False):
+        for i, v in enumerate(vals):
+            cell = row.cells[i]
+            cell.text = ""
+            run  = cell.paragraphs[0].add_run(str(v))
+            run.font.size  = Pt(9)
+            run.font.bold  = bold
+            if center:
+                cell.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+            if alt:
+                cell_bg(cell, 0xEB, 0xF2, 0xFA)
+
+    def h1(text, color=BLUE):
+        p   = doc.add_paragraph()
+        run = p.add_run(text)
+        run.font.bold = True; run.font.size = Pt(16); run.font.color.rgb = color
+        p.paragraph_format.space_before = Pt(18)
+        p.paragraph_format.space_after  = Pt(6)
+        return p
+
+    def h2(text, color=DARK):
+        p   = doc.add_paragraph()
+        run = p.add_run(text)
+        run.font.bold = True; run.font.size = Pt(12); run.font.color.rgb = color
+        p.paragraph_format.space_before = Pt(12)
+        p.paragraph_format.space_after  = Pt(4)
+        return p
+
+    def body(text, bold=False, italic=False, size=10.5, color=None):
+        p   = doc.add_paragraph()
+        run = p.add_run(text)
+        run.font.size   = Pt(size)
+        run.font.bold   = bold
+        run.font.italic = italic
+        if color:
+            run.font.color.rgb = color
+        return p
+
+    def bullet(text):
+        p   = doc.add_paragraph(style="List Bullet")
+        run = p.add_run(text)
+        run.font.size = Pt(10)
+
+    def bar(val, max_val=9, w=14):
+        f = int(round(val / max_val * w)) if max_val else 0
+        return "█" * f + "░" * (w - f)
+
+    # ═══════════════════════════════════════════════════
+    # PORTADA
+    # ═══════════════════════════════════════════════════
+    for _ in range(3):
+        doc.add_paragraph()
+
+    for line, size, clr in [
+        ("INFORME METODOLÓGICO", 22, DARK),
+        ("DE CONSTRUCCIÓN DE CARTERA", 22, DARK),
+        ("", 6, DARK),
+        ("Proceso Analítico Jerárquico (AHP) + Optimización de Markowitz", 13, BLUE),
+    ]:
+        p   = doc.add_paragraph()
+        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        run = p.add_run(line)
+        run.font.bold  = True
+        run.font.size  = Pt(size)
+        run.font.color.rgb = clr
+
+    for _ in range(2):
+        doc.add_paragraph()
+
+    p   = doc.add_paragraph()
+    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    run = p.add_run(f"Perfil del Inversor:  {profile_label.upper()}")
+    run.font.bold = True; run.font.size = Pt(20); run.font.color.rgb = P_CLR
+
+    doc.add_paragraph()
+    p   = doc.add_paragraph()
+    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    run = p.add_run(f"Portafolio Recomendado:  {winner.get('name','—')}   ·   Score AHP: {winner.get('score',0):.1f}%")
+    run.font.size = Pt(12); run.font.color.rgb = GRAY
+
+    for _ in range(4):
+        doc.add_paragraph()
+
+    for line, size in [(f"Generado el {today}", 10), ("AHP Portfolio Selector  —  TFG 2025", 9)]:
+        p   = doc.add_paragraph()
+        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        run = p.add_run(line)
+        run.font.size = Pt(size); run.font.italic = True; run.font.color.rgb = GRAY
+
+    doc.add_page_break()
+
+    # ═══════════════════════════════════════════════════
+    # RESUMEN EJECUTIVO
+    # ═══════════════════════════════════════════════════
+    h1("RESUMEN EJECUTIVO")
+
+    body(
+        f"Este informe documenta, paso a paso, el proceso de construcción y selección de la cartera "
+        f"óptima para un inversor con perfil {profile_label.upper()}. La metodología aplica el Proceso "
+        f"Analítico Jerárquico (AHP) de Saaty (1990) combinado con la optimización media-varianza de "
+        f"Markowitz (1952). Se analizaron {n_analyzed} acciones de tres índices internacionales, "
+        f"seleccionando {n_selected} valores que superaron los filtros del perfil. A partir de ellos "
+        f"se construyeron múltiples portafolios candidatos que fueron evaluados frente a 15 criterios "
+        f"financieros en 5 categorías (Ratio de Consistencia: {cr} "
+        f"{'✓' if cr < 0.10 else '⚠'})."
+    )
+
+    if winner_port:
+        doc.add_paragraph()
+        tbl = doc.add_table(rows=2, cols=6)
+        tbl.style = "Table Grid"
+        thead(tbl, ["Rentab. Anual", "Volatilidad", "Sharpe", "Max Drawdown", "Beta", "Alpha"])
+        trow(tbl.rows[1], [
+            f"{winner_port.get('rentabilidad',0):.2f}%",
+            f"{winner_port.get('volatilidad',0):.2f}%",
+            f"{winner_port.get('sharpe',0):.3f}",
+            f"{winner_port.get('max_drawdown',0):.2f}%",
+            f"{winner_port.get('beta',0):.3f}",
+            f"{winner_port.get('alpha',0):.2f}%",
+        ], center=True, bold=True)
+
+    doc.add_page_break()
+
+    # ═══════════════════════════════════════════════════
+    # 1. PERFIL DEL INVERSOR
+    # ═══════════════════════════════════════════════════
+    h1("1.  PERFIL DEL INVERSOR")
+    h2("1.1  Clasificación del Perfil")
+
+    body(
+        "A través del cuestionario de 15 preguntas estructurado en 5 dimensiones (Tolerancia al Riesgo, "
+        "Horizonte Temporal, Situación Financiera, Perfil Psicológico y Conocimiento), el sistema "
+        "determinó el siguiente perfil inversor:"
+    )
+    p   = doc.add_paragraph()
+    run = p.add_run(f"  Perfil asignado:  {profile_label.upper()}")
+    run.font.bold = True; run.font.size = Pt(14); run.font.color.rgb = P_CLR
+    body(profile_desc)
+
+    if scores:
+        h2("1.2  Puntuaciones por Perfil")
+        body("Afinidad del inversor con cada perfil (escala 0-50 pts):")
+        sorted_sc = sorted(scores.items(), key=lambda x: -x[1])
+        tbl = doc.add_table(rows=len(sorted_sc) + 1, cols=3)
+        tbl.style = "Table Grid"
+        thead(tbl, ["Perfil", "Puntuación", "Afinidad relativa"])
+        for i, (pn, ps) in enumerate(sorted_sc):
+            trow(tbl.rows[i+1],
+                 [pn.replace("_"," ").capitalize(), f"{ps} / 50 pts", bar(ps, 50, 20)],
+                 alt=(i % 2 == 0))
+
+    h2("1.3  Implicaciones del Perfil en la Estrategia")
+
+    PROFILE_IMPL = {
+        "conservador": [
+            "Se priorizan large caps (>$10B market cap) con alta liquidez (>1M volumen diario)",
+            "Los criterios de riesgo (VaR, CVaR, volatilidad, max drawdown) tienen el mayor peso AHP",
+            "Se exigen métricas ajustadas por riesgo elevadas: Sharpe (7/9) y Sortino (8/9)",
+            "El universo se restringe a empresas con historial probado y flujos de caja estables",
+        ],
+        "moderado": [
+            "Se busca equilibrio entre rentabilidad esperada y control del riesgo",
+            "Capitalización mínima $5B con volumen diario >750K acciones",
+            "El AHP equilibra criterios de rendimiento y riesgo con pesos similares (5-8/9)",
+            "Portafolio diversificado geográficamente entre los tres índices analizados",
+        ],
+        "agresivo": [
+            "Se acepta mayor volatilidad a cambio de mayor potencial de rentabilidad",
+            "Universo más amplio incluyendo mid caps ($2B+ market cap)",
+            "El AHP prioriza rentabilidad (8/9), alpha de Jensen (7/9) y diferencial kp (7/9)",
+            "Mayor concentración en activos de alto crecimiento potencial",
+        ],
+    }
+    for impl in PROFILE_IMPL.get(profile, []):
+        bullet(impl)
+
+    doc.add_page_break()
+
+    # ═══════════════════════════════════════════════════
+    # 2. UNIVERSO Y DATOS
+    # ═══════════════════════════════════════════════════
+    h1("2.  UNIVERSO DE INVERSIÓN Y DATOS UTILIZADOS")
+    h2("2.1  Índices Analizados")
+
+    body(
+        "El análisis cubre el universo de acciones de tres grandes índices internacionales, "
+        "garantizando diversificación geográfica y sectorial desde el inicio:"
+    )
+    tbl = doc.add_table(rows=4, cols=4)
+    tbl.style = "Table Grid"
+    thead(tbl, ["Índice", "Región", "Universo", "Por qué se incluye"])
+    idx_data = [
+        ("S&P 500",        "EE.UU.",  "500 mayores empresas americanas",
+         "Mayor mercado de renta variable; alta liquidez y datos históricos fiables"),
+        ("Eurostoxx 600",  "Europa",  "600 principales empresas europeas",
+         "Diversificación geográfica; exposición al ciclo económico europeo"),
+        ("Nikkei 225",     "Japón",   "225 empresas representativas de Tokio",
+         "Tercera economía mundial; baja correlación histórica con mercados occidentales"),
+    ]
+    for i, row_data in enumerate(idx_data):
+        trow(tbl.rows[i+1], row_data, alt=(i % 2 == 0))
+
+    h2("2.2  Indicadores Financieros Calculados")
+    body(
+        f"Para cada acción se obtuvieron series históricas de precios diarios ajustados "
+        f"de los últimos 2 años "
+        f"({'Yahoo Finance — datos reales de mercado' if not is_synthetic else 'simulación Monte Carlo calibrada al mercado'}). "
+        f"Se calcularon los 15 indicadores siguientes:"
+    )
+
+    METRICS = [
+        ("Rentabilidad anualizada",     "Rendimiento compuesto anual del activo",                               "Rendimiento"),
+        ("Ratio de Sharpe",             "Exceso de retorno por unidad de riesgo total",                         "Rendimiento"),
+        ("Ratio de Sortino",            "Como Sharpe pero solo penaliza el riesgo a la baja",                   "Rendimiento"),
+        ("Alpha de Jensen",             "Rentabilidad por encima de la predicción del CAPM",                    "Rendimiento"),
+        ("Volatilidad (σ)",             "Desviación estándar anualizada de los retornos logarítmicos",          "Riesgo"),
+        ("VaR 95%",                     "Pérdida máxima esperada anual con 95% de confianza",                   "Riesgo"),
+        ("CVaR / Expected Shortfall",   "Pérdida media en el 5% de peores escenarios",                         "Riesgo"),
+        ("Max Drawdown",                "Caída máxima desde máximo histórico al mínimo posterior",              "Riesgo"),
+        ("Beta",                        "Sensibilidad del activo al movimiento del índice de referencia",       "Eficiencia"),
+        ("Tracking Error",              "Desviación de retorno del portafolio vs benchmark",                    "Eficiencia"),
+        ("Rentab. − Coste Capital (kp)","Exceso de rentabilidad sobre el coste de capital del portafolio",     "Eficiencia"),
+        ("Coef. de Variación (CV)",     "Riesgo por unidad de rentabilidad (σ / μ)",                           "Estabilidad"),
+        ("Asimetría (Skewness)",        "Sesgo de la distribución de retornos (positivo = favorable)",          "Estabilidad"),
+        ("Correlación media",           "Correlación media entre todos los pares de activos de la cartera",     "Diversificación"),
+        ("Diversificación geográfica",  "Proporción de activos de distinta región en el portafolio",            "Diversificación"),
+    ]
+    tbl = doc.add_table(rows=len(METRICS)+1, cols=3)
+    tbl.style = "Table Grid"
+    thead(tbl, ["Indicador", "Descripción y para qué se usa", "Categoría"])
+    for i, (ind, desc, cat) in enumerate(METRICS):
+        trow(tbl.rows[i+1], [ind, desc, cat], alt=(i % 2 == 0))
+
+    body(
+        f"Total acciones analizadas: {n_analyzed}  ·  Acciones que pasaron los filtros: {n_selected}",
+        italic=True, size=9.5, color=GRAY
+    )
+
+    doc.add_page_break()
+
+    # ═══════════════════════════════════════════════════
+    # 3. FILTRADO DE ACCIONES
+    # ═══════════════════════════════════════════════════
+    h1("3.  FILTRADO Y SELECCIÓN DE ACCIONES")
+    h2("3.1  Criterios de Pre-filtrado por Perfil")
+    body(
+        f"Antes de aplicar el AHP se filtra el universo para conservar solo los activos consistentes "
+        f"con el perfil {profile_label.upper()}. Los filtros son cuantitativos y se aplican secuencialmente:"
+    )
+
+    FILTERS = {
+        "conservador": [
+            ("Capitalización mínima",    "$10.000 M",       "Garantiza alta liquidez y estabilidad; reduce riesgo de quiebra"),
+            ("Volumen medio diario",     "> 1.000.000 acc.", "Permite entrar/salir sin mover precio; minimiza riesgo de liquidez"),
+            ("Rentabilidad positiva",    "Obligatoria",      "Un perfil conservador no invierte en empresas en pérdidas"),
+            ("Máx. acciones por índice", "80",               "Reduce ruido; selecciona las más representativas de cada mercado"),
+            ("Acciones finales",         "12 valores",       "Diversificación eficiente sin over-diversification"),
+        ],
+        "moderado": [
+            ("Capitalización mínima",    "$5.000 M",         "Balance entre liquidez y acceso a empresas de crecimiento"),
+            ("Volumen medio diario",     "> 750.000 acc.",   "Liquidez adecuada para horizonte medio"),
+            ("Rentabilidad positiva",    "Obligatoria",      "Se evitan empresas en pérdidas"),
+            ("Máx. acciones por índice", "100",              "Universo más amplio que conservador"),
+            ("Acciones finales",         "12 valores",       "Diversificación equilibrada"),
+        ],
+        "agresivo": [
+            ("Capitalización mínima",    "$2.000 M",         "Incluye mid-caps con mayor potencial de revalorización"),
+            ("Volumen medio diario",     "> 500.000 acc.",   "Liquidez mínima aceptable"),
+            ("Rentabilidad positiva",    "Obligatoria",      "Criterio básico de viabilidad"),
+            ("Máx. acciones por índice", "120",              "Universo amplio para capturar oportunidades"),
+            ("Acciones finales",         "12 valores",       "Concentración en los mejores candidatos"),
+        ],
+    }
+
+    fdata = FILTERS.get(profile, [])
+    tbl = doc.add_table(rows=len(fdata)+1, cols=3)
+    tbl.style = "Table Grid"
+    thead(tbl, ["Filtro aplicado", f"Valor para perfil {profile_label}", "Justificación"])
+    for i, row_data in enumerate(fdata):
+        trow(tbl.rows[i+1], row_data, alt=(i % 2 == 0))
+
+    if stocks:
+        h2("3.2  Acciones Seleccionadas (Top 8 por puntuación de filtrado)")
+        body(f"Las {n_selected} acciones que superaron todos los filtros. Las métricas corresponden al periodo de análisis (2 años):")
+        tbl = doc.add_table(rows=len(stocks)+1, cols=5)
+        tbl.style = "Table Grid"
+        thead(tbl, ["Ticker", "Rentab. Anual", "Sharpe", "Volatilidad", "Beta"])
+        for i, s in enumerate(stocks):
+            trow(tbl.rows[i+1], [
+                s.get("ticker",""),
+                f"{s.get('rentabilidad',0):.2f}%",
+                f"{s.get('sharpe',0):.3f}",
+                f"{s.get('volatilidad',0):.2f}%",
+                f"{s.get('beta',0):.3f}",
+            ], alt=(i % 2 == 0), center=True)
+
+    doc.add_page_break()
+
+    # ═══════════════════════════════════════════════════
+    # 4. METODOLOGÍA AHP
+    # ═══════════════════════════════════════════════════
+    h1("4.  METODOLOGÍA AHP — PONDERACIÓN DE CRITERIOS")
+    h2("4.1  ¿Qué es el AHP?")
+    body(
+        "El Proceso Analítico Jerárquico (AHP), desarrollado por Thomas L. Saaty (1990), es una técnica "
+        "de decisión multicriterio que estructura problemas complejos mediante una jerarquía de criterios. "
+        "El proceso consiste en:"
+    )
+    for step in [
+        "Definir los 15 criterios financieros de evaluación relevantes para el objetivo inversor",
+        "Construir una matriz de comparación por pares (15×15) usando la escala de Saaty (1-9)",
+        "Calcular el vector de prioridades (eigenvector principal normalizado) → pesos de cada criterio",
+        f"Verificar consistencia: Ratio de Consistencia (CR) = {cr}  {'✓ Consistente (CR < 0.10)' if cr < 0.10 else '⚠ Límite aceptable'}",
+        "Aplicar los pesos obtenidos para puntuar y rankear los portafolios candidatos",
+    ]:
+        bullet(step)
+
+    h2(f"4.2  Pesos AHP para Perfil {profile_label}")
+    body(
+        f"Los pesos reflejan la importancia relativa de cada criterio para el perfil {profile_label.upper()} "
+        f"en la escala de Saaty (1 = importancia mínima, 9 = importancia máxima). "
+        f"Los criterios con peso mayor dominan la selección del portafolio ganador:"
+    )
+
+    if top_criteria:
+        tbl = doc.add_table(rows=len(top_criteria)+1, cols=4)
+        tbl.style = "Table Grid"
+        thead(tbl, ["Criterio", "Peso (Saaty)", "Visualización", "Objetivo"])
+        for i, c in enumerate(top_criteria):
+            trow(tbl.rows[i+1], [
+                c.get("name",""),
+                f"{c.get('weight',0)} / 9",
+                bar(c.get("weight",0), 9, 12),
+                "Maximizar" if c.get("direction") == "maximize" else "Minimizar",
+            ], alt=(i % 2 == 0), center=True)
+
+    h2("4.3  Justificación de los Pesos")
+    WEIGHT_JUST = {
+        "conservador": (
+            "Para el perfil conservador los criterios de RIESGO reciben los pesos más altos (7-9/9). "
+            "El CVaR y Max Drawdown tienen peso máximo porque este inversor no tolera pérdidas significativas. "
+            "La rentabilidad bruta tiene el menor peso (2/9): se acepta sacrificar rendimiento a cambio de protección. "
+            "El Sharpe (7/9) y Sortino (8/9) son altos porque miden rentabilidad ajustada por riesgo — el objetivo "
+            "es el máximo rendimiento POR UNIDAD DE RIESGO, no el máximo rendimiento absoluto."
+        ),
+        "moderado": (
+            "Para el perfil moderado se busca equilibrio. El Max Drawdown (8/9) y el Sharpe (8/9) lideran "
+            "porque este inversor quiere limitar caídas máximas y maximizar eficiencia riesgo/retorno. "
+            "La rentabilidad tiene peso medio (5/9) — importa, pero no a cualquier precio de riesgo. "
+            "La correlación media entre activos (7/9) garantiza diversificación real. "
+            "El beta moderado (6/9) asegura cierta independencia del movimiento general de mercado."
+        ),
+        "agresivo": (
+            "Para el perfil agresivo, RENTABILIDAD (8/9) y ALPHA (7/9) lideran el ranking. "
+            "Este inversor busca batir al mercado y maximizar el crecimiento del capital. "
+            "El VaR y CVaR tienen peso bajo (3/9) porque se acepta la posibilidad de pérdidas mayores "
+            "a cambio de mayor upside potencial. El diferencial rentabilidad-coste de capital (7/9) es "
+            "prioritario para justificar el riesgo asumido sobre el coste de oportunidad."
+        ),
+    }
+    body(WEIGHT_JUST.get(profile, ""))
+
+    doc.add_page_break()
+
+    # ═══════════════════════════════════════════════════
+    # 5. CONSTRUCCIÓN DE PORTAFOLIOS (MARKOWITZ)
+    # ═══════════════════════════════════════════════════
+    h1("5.  CONSTRUCCIÓN DE PORTAFOLIOS — OPTIMIZACIÓN DE MARKOWITZ")
+    h2("5.1  Método de Optimización")
+    body(
+        "Sobre las acciones seleccionadas en el paso anterior se aplica la teoría de portafolios de "
+        "Markowitz (1952). Se calculan múltiples carteras candidatas resolviendo distintos "
+        "problemas de optimización convexa:"
+    )
+    for step in [
+        "Se calcula la matriz de covarianzas Σ de los retornos logarítmicos diarios de todos los activos",
+        "Se definen pesos w = (w₁,...,wₙ) con restricciones: Σwᵢ = 1,  wᵢ ≥ 0  (solo posiciones largas)",
+        "Portafolio Máximo Sharpe: max [ E(Rp) − Rf ] / σ(Rp)",
+        "Portafolio Mínima Varianza: min σ²(Rp) = wᵀΣw",
+        "Portafolio Máxima Rentabilidad: max E(Rp)",
+        "Portafolio Equal Weight: wᵢ = 1/n  (benchmark igualitario como referencia)",
+    ]:
+        bullet(step)
+
+    h2("5.2  Por qué el Porcentaje Específico de cada Acción")
+    body(
+        "Los pesos asignados a cada acción NO son arbitrarios. Son el resultado matemático de la "
+        "optimización que maximiza el Ratio de Sharpe del portafolio completo, resolviendo:"
+    )
+    p   = doc.add_paragraph()
+    run = p.add_run("    max  w'μ − Rf  /  √(w'Σw)")
+    run.font.name = "Courier New"; run.font.size = Pt(12); run.font.bold = True
+    run.font.color.rgb = BLUE
+    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+    body(
+        "Donde μ es el vector de rentabilidades esperadas y Σ la matriz de covarianzas. "
+        "El resultado w* da los pesos exactos que maximizan el exceso de rentabilidad por unidad de riesgo. "
+        "En la práctica, reciben más peso los activos que tienen:"
+    )
+    for reason in [
+        "Mayor rentabilidad esperada individual",
+        "Menor volatilidad propia",
+        "Baja correlación con el resto de activos de la cartera (efecto diversificación)",
+    ]:
+        bullet(reason)
+
+    if allocation:
+        h2("5.3  Pesos Óptimos del Portafolio Ganador")
+        body(f"Resultado de Markowitz para el portafolio {winner.get('name','')}:")
+        tbl = doc.add_table(rows=len(allocation)+1, cols=4)
+        tbl.style = "Table Grid"
+        thead(tbl, ["Empresa (Ticker)", "% Asignado", "Visualización", "Sharpe individual"])
+        for i, a in enumerate(allocation):
+            ticker = a.get("ticker","")
+            wstr   = a.get("weight","0%")
+            sd     = next((s for s in stocks if s.get("ticker") == ticker), {})
+            sharpe_ind = sd.get("sharpe", 0) if sd else 0
+            try:
+                wf = float(wstr.replace("%",""))
+                vis = bar(wf, 100, 16)
+            except Exception:
+                vis = wstr
+            trow(tbl.rows[i+1], [ticker, wstr, vis, f"{sharpe_ind:.3f}" if sharpe_ind else "—"],
+                 alt=(i % 2 == 0), center=True)
+
+    doc.add_page_break()
+
+    # ═══════════════════════════════════════════════════
+    # 6. RANKING AHP
+    # ═══════════════════════════════════════════════════
+    h1("6.  RANKING AHP Y SELECCIÓN DEL PORTAFOLIO GANADOR")
+    h2("6.1  Proceso de Puntuación AHP")
+    body(
+        f"El motor AHP evalúa los {len(portfolios)} portafolios candidatos frente a los 15 criterios. El proceso:"
+    )
+    for step in [
+        "Para cada criterio, se normalizan los valores de todos los portafolios (escala 0-1)",
+        "Se pondera cada valor normalizado por el peso AHP del criterio correspondiente",
+        "Se suman ponderadamente para obtener la puntuación global de cada portafolio",
+        "El portafolio con mayor puntuación total AHP es el ganador",
+    ]:
+        bullet(step)
+
+    if ranking and portfolios:
+        h2("6.2  Ranking Final")
+        tbl = doc.add_table(rows=len(ranking)+1, cols=7)
+        tbl.style = "Table Grid"
+        thead(tbl, ["Pos.", "Portafolio", "Score AHP", "Rentab.", "Sharpe", "Volatil.", "Max DD"])
+        for i, r in enumerate(ranking):
+            pt = next((p for p in portfolios if p.get("name") == r.get("name")), {})
+            row = tbl.rows[i+1]
+            vals = [
+                f"#{r.get('rank',i+1)}",
+                r.get("name",""),
+                f"{r.get('score',0):.1f}%",
+                f"{pt.get('rentabilidad',0):.2f}%",
+                f"{pt.get('sharpe',0):.3f}",
+                f"{pt.get('volatilidad',0):.2f}%",
+                f"{pt.get('max_drawdown',0):.2f}%",
+            ]
+            for j, v in enumerate(vals):
+                cell = row.cells[j]
+                cell.text = ""
+                run = cell.paragraphs[0].add_run(v)
+                run.font.size = Pt(9)
+                run.font.bold = (i == 0)
+                cell.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+                if i == 0:
+                    cell_bg(cell, 0xD4, 0xAF, 0x37)
+                elif i % 2 == 0:
+                    cell_bg(cell, 0xEB, 0xF2, 0xFA)
+
+    h2("6.3  Por qué Ganó Este Portafolio")
+    WINNER_REASONS = {
+        "conservador": [
+            f"Menor combinación de riesgo del conjunto: volatilidad {winner_port.get('volatilidad',0):.2f}%, max drawdown {winner_port.get('max_drawdown',0):.2f}%",
+            f"Sharpe ratio {winner_port.get('sharpe',0):.3f}: máxima eficiencia riesgo/retorno entre los candidatos",
+            f"Beta {winner_port.get('beta',0):.3f}: baja sensibilidad al mercado, reduce el riesgo sistemático",
+            "Activos con baja correlación entre sí, maximizando el efecto real de diversificación",
+        ],
+        "moderado": [
+            f"Mejor equilibrio rentabilidad/riesgo: {winner_port.get('rentabilidad',0):.2f}% de retorno con {winner_port.get('volatilidad',0):.2f}% de volatilidad",
+            f"Sharpe ratio {winner_port.get('sharpe',0):.3f}, de los más altos del conjunto de candidatos",
+            f"Max drawdown {winner_port.get('max_drawdown',0):.2f}% dentro de niveles tolerables para el perfil",
+            "Composición que garantiza diversificación geográfica y sectorial",
+        ],
+        "agresivo": [
+            f"Mayor rentabilidad anualizada: {winner_port.get('rentabilidad',0):.2f}%, superando a todos los candidatos",
+            f"Alpha de Jensen {winner_port.get('alpha',0):.2f}%: genera valor por encima de lo que predice el CAPM",
+            f"A pesar de mayor volatilidad ({winner_port.get('volatilidad',0):.2f}%), el Sharpe {winner_port.get('sharpe',0):.3f} sigue siendo positivo",
+            "Los activos seleccionados presentan el mayor potencial de crecimiento histórico documentado",
+        ],
+    }
+    for reason in WINNER_REASONS.get(profile, []):
+        bullet(reason)
+
+    doc.add_page_break()
+
+    # ═══════════════════════════════════════════════════
+    # 7. PORTAFOLIO RECOMENDADO
+    # ═══════════════════════════════════════════════════
+    h1("7.  PORTAFOLIO RECOMENDADO — COMPOSICIÓN DETALLADA")
+
+    p   = doc.add_paragraph()
+    run = p.add_run(f"  ★  {winner.get('name','')}   —   Score AHP: {winner.get('score',0):.1f}%")
+    run.font.bold = True; run.font.size = Pt(16); run.font.color.rgb = GOLD
+
+    if winner_port:
+        body("Métricas financieras:", bold=True)
+        tbl = doc.add_table(rows=3, cols=6)
+        tbl.style = "Table Grid"
+        thead(tbl, ["Métrica", "Valor", "Métrica", "Valor", "Métrica", "Valor"])
+        pairs = [
+            ("Rentabilidad Anual",  f"{winner_port.get('rentabilidad',0):.2f}%"),
+            ("Volatilidad",         f"{winner_port.get('volatilidad',0):.2f}%"),
+            ("Ratio de Sharpe",     f"{winner_port.get('sharpe',0):.4f}"),
+            ("Max Drawdown",        f"{winner_port.get('max_drawdown',0):.2f}%"),
+            ("Beta",                f"{winner_port.get('beta',0):.4f}"),
+            ("Alpha de Jensen",     f"{winner_port.get('alpha',0):.2f}%"),
+        ]
+        for row_idx in range(2):
+            row = tbl.rows[row_idx+1]
+            for col_idx in range(3):
+                pi = row_idx*3 + col_idx
+                if pi < len(pairs):
+                    row.cells[col_idx*2].text = ""
+                    row.cells[col_idx*2].paragraphs[0].add_run(pairs[pi][0]).font.size = Pt(9)
+                    row.cells[col_idx*2+1].text = ""
+                    rn = row.cells[col_idx*2+1].paragraphs[0].add_run(pairs[pi][1])
+                    rn.font.size = Pt(9); rn.font.bold = True
+                    row.cells[col_idx*2+1].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+                    if row_idx % 2 == 0:
+                        cell_bg(row.cells[col_idx*2],   0xEB, 0xF2, 0xFA)
+                        cell_bg(row.cells[col_idx*2+1], 0xEB, 0xF2, 0xFA)
+
+    if allocation:
+        body("\nComposición y justificación de la asignación de capital:", bold=True)
+        body(
+            "Los porcentajes son el resultado matemático de la optimización de Markowitz. "
+            "Cada peso representa la fracción óptima de capital que maximiza el Ratio de Sharpe "
+            "del portafolio completo, teniendo en cuenta la rentabilidad esperada, la volatilidad "
+            "individual y las correlaciones cruzadas entre todos los activos:"
+        )
+        tbl = doc.add_table(rows=len(allocation)+1, cols=4)
+        tbl.style = "Table Grid"
+        thead(tbl, ["Empresa (Ticker)", "Asignación de Capital", "Sharpe Individual", "Rol en el portafolio"])
+        for i, a in enumerate(allocation):
+            ticker = a.get("ticker","")
+            wstr   = a.get("weight","0%")
+            sd     = next((s for s in stocks if s.get("ticker") == ticker), {})
+            sharpe_ind = sd.get("sharpe", 0) if sd else 0
+            try:
+                wf   = float(wstr.replace("%",""))
+                role = "Posición principal" if wf > 25 else "Posición media" if wf > 10 else "Diversificadora"
+            except Exception:
+                role = "—"
+            trow(tbl.rows[i+1],
+                 [ticker, wstr, f"{sharpe_ind:.3f}" if sharpe_ind else "—", role],
+                 alt=(i % 2 == 0), center=True)
+
+        body(
+            "Las posiciones principales concentran capital en activos con alta rentabilidad ajustada por riesgo "
+            "y baja correlación con el resto. Las posiciones diversificadoras reducen el riesgo global de la "
+            "cartera gracias a su baja covarianza con los demás activos, aunque su Sharpe individual sea menor.",
+            italic=True, size=9.5, color=GRAY
+        )
+
+    doc.add_page_break()
+
+    # ═══════════════════════════════════════════════════
+    # 8. REFERENCIAS
+    # ═══════════════════════════════════════════════════
+    h1("8.  REFERENCIAS BIBLIOGRÁFICAS")
+
+    REFS = [
+        "Saaty, T.L. (1990). How to make a decision: The Analytic Hierarchy Process. EJOR, 48(1), 9-26.",
+        "Markowitz, H.M. (1952). Portfolio Selection. The Journal of Finance, 7(1), 77-91.",
+        "Sharpe, W.F. (1966). Mutual Fund Performance. Journal of Business, 39(1), 119-138.",
+        "Sortino, F.A. y Price, L.N. (1994). Performance Measurement in a Downside Risk Framework. Journal of Investing, 3(3), 59-64.",
+        "Jensen, M.C. (1968). The Performance of Mutual Funds 1945-1964. Journal of Finance, 23(2), 389-416.",
+        "Escobar, J.W. (2015). Selección de portafolios óptimos usando AHP. Contaduría y Administración, 60, 346-366.",
+        "Elton, E.J. y Gruber, M.J. (1995). Modern Portfolio Theory and Investment Analysis. Wiley.",
+        "Artzner, P. et al. (1999). Coherent Measures of Risk. Mathematical Finance, 9(3), 203-228.",
+    ]
+    for ref in REFS:
+        bullet(ref)
+
+    body(
+        f"\nDocumento generado automáticamente por AHP Portfolio Selector el {today}. "
+        f"Fuente de datos: {'Yahoo Finance (mercado real)' if not is_synthetic else 'Simulación Monte Carlo'}. "
+        "Este informe es de carácter informativo y no constituye asesoramiento financiero regulado.",
+        italic=True, size=9, color=GRAY
+    )
+
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".docx")
+    doc.save(tmp.name)
+    return tmp.name
+```
+
+
+================================================================================
+File: apps\api\routers\stocks.py
+================================================================================
+
+```python
+"""
+Stocks API router — individual stock detail + history.
+"""
+
+import asyncio
+from fastapi import APIRouter, HTTPException
+
+from apps.api.services.market_data import get_stock_price, ALL_TICKERS
+
+router = APIRouter(prefix="/api/stocks", tags=["stocks"])
+
+
+@router.get("/{ticker}")
+async def stock_detail(ticker: str):
+    """Return detailed stock info and current price."""
+    cached = get_stock_price(ticker.upper())
+    if cached:
+        return {
+            "ticker": ticker.upper(),
+            "name": cached.get("name", ticker),
+            "sector": cached.get("sector", ""),
+            "index": cached.get("index", ""),
+            "price": cached.get("price", 0),
+            "change_1d": cached.get("change_1d", 0),
+            "indicators": {},
+            "history": [],
+        }
+
+    raise HTTPException(status_code=404, detail=f"Ticker {ticker} not found")
+
+
+@router.get("/{ticker}/history")
+async def stock_history(ticker: str, period: str = "6mo"):
+    """Return price history for charting."""
+    try:
+        import yfinance as yf
+        data = await asyncio.to_thread(
+            lambda: yf.download(ticker, period=period, progress=False)
+        )
+        if data.empty:
+            raise HTTPException(status_code=404, detail="No data available")
+
+        history = []
+        for date, row in data.iterrows():
+            history.append({
+                "date": date.strftime("%Y-%m-%d"),
+                "open": round(float(row.get("Open", 0)), 2),
+                "high": round(float(row.get("High", 0)), 2),
+                "low": round(float(row.get("Low", 0)), 2),
+                "close": round(float(row.get("Close", 0)), 2),
+                "volume": int(row.get("Volume", 0)),
+            })
+
+        return {"ticker": ticker.upper(), "data": history}
+
+    except ImportError:
+        raise HTTPException(status_code=503, detail="yfinance not available")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+```
+
+
+================================================================================
+File: apps\api\routers\__init__.py
+================================================================================
+
+```python
+
+```
+
+
+================================================================================
+File: apps\api\services\market_data.py
+================================================================================
+
+```python
+"""
+Market data service — background polling + in-memory cache.
+Provides real-time(ish) stock prices for the market overview.
+Tickers are fetched dynamically from live sources via data_loader.
+"""
+
+import asyncio
+import time
+from datetime import datetime
+from typing import Optional
+
+import numpy as np
+import pandas as pd
+
+from modules.data_loader import get_live_universe
+
+
+# In-memory cache
+_cache: dict = {
+    "stocks": {},
+    "last_updated": None,
+    "is_live": False,
+}
+
+# Dynamically populated on first use
+_universe_loaded = False
+STOCK_UNIVERSE: dict = {}
+ALL_TICKERS: list = []
+TICKER_INDEX: dict = {}
+
+
+def _ensure_universe():
+    """Load stock universe from live sources (once, then cached in data_loader)."""
+    global _universe_loaded, STOCK_UNIVERSE, ALL_TICKERS, TICKER_INDEX
+    if _universe_loaded:
+        return
+    STOCK_UNIVERSE = get_live_universe()
+    ALL_TICKERS = []
+    for tickers in STOCK_UNIVERSE.values():
+        ALL_TICKERS.extend(tickers)
+    TICKER_INDEX = {}
+    for idx, tickers in STOCK_UNIVERSE.items():
+        for t in tickers:
+            TICKER_INDEX[t] = idx
+    _universe_loaded = True
+
+
+async def poll_market_data():
+    """Background task that polls yfinance for current prices."""
+    # Load universe on first poll (runs in thread to avoid blocking)
+    await asyncio.to_thread(_ensure_universe)
+    while True:
+        try:
+            await asyncio.to_thread(_fetch_all_prices)
+        except Exception as e:
+            print(f"[market_data] Poll error: {e}")
+        await asyncio.sleep(30)
+
+
+def _fetch_all_prices():
+    """Synchronous yfinance fetch — runs in thread pool."""
+    _ensure_universe()
+    try:
+        import yfinance as yf
+
+        data = yf.download(
+            ALL_TICKERS,
+            period="8d",
+            interval="1d",
+            progress=False,
+            threads=True,
+        )
+
+        if data.empty:
+            return
+
+        close = data["Close"] if "Close" in data.columns else data.get("Adj Close", data)
+
+        stocks = {}
+        for ticker in ALL_TICKERS:
+            try:
+                if ticker not in close.columns:
+                    continue
+                series = close[ticker].dropna()
+                if len(series) < 2:
+                    continue
+
+                current_price = float(series.iloc[-1])
+                prev_price = float(series.iloc[-2])
+                change_1d = (current_price - prev_price) / prev_price
+
+                # 7-day sparkline
+                sparkline = series.tail(7).tolist()
+
+                # 7-day change
+                if len(series) >= 7:
+                    price_7d_ago = float(series.iloc[-7])
+                    change_7d = (current_price - price_7d_ago) / price_7d_ago
+                else:
+                    change_7d = change_1d
+
+                stocks[ticker] = {
+                    "ticker": ticker,
+                    "name": ticker,
+                    "price": round(current_price, 2),
+                    "change_1d": round(change_1d * 100, 2),
+                    "change_7d": round(change_7d * 100, 2),
+                    "market_cap": None,
+                    "volume": None,
+                    "sector": "",
+                    "index": TICKER_INDEX.get(ticker, ""),
+                    "sparkline": [round(float(v), 2) for v in sparkline],
+                }
+            except Exception:
+                continue
+
+        if stocks:
+            _cache["stocks"] = stocks
+            _cache["last_updated"] = datetime.now().isoformat()
+            _cache["is_live"] = True
+
+    except ImportError:
+        print("[market_data] yfinance not available, generating synthetic prices")
+        _generate_synthetic_prices()
+    except Exception as e:
+        print(f"[market_data] Fetch error: {e}")
+        if not _cache["stocks"]:
+            _generate_synthetic_prices()
+
+
+def _generate_synthetic_prices():
+    """Generate mock prices when yfinance is unavailable."""
+    _ensure_universe()
+    np.random.seed(42)
+    stocks = {}
+    for ticker in ALL_TICKERS:
+        base_price = np.random.uniform(50, 500)
+        change_1d = np.random.uniform(-5, 5)
+        change_7d = np.random.uniform(-10, 10)
+        sparkline = [round(base_price * (1 + np.random.uniform(-0.03, 0.03)), 2) for _ in range(7)]
+
+        stocks[ticker] = {
+            "ticker": ticker,
+            "name": ticker,
+            "price": round(base_price, 2),
+            "change_1d": round(change_1d, 2),
+            "change_7d": round(change_7d, 2),
+            "market_cap": round(np.random.uniform(10e9, 3e12), 0),
+            "volume": int(np.random.uniform(1e6, 100e6)),
+            "sector": "",
+            "index": TICKER_INDEX.get(ticker, ""),
+            "sparkline": sparkline,
+        }
+
+    _cache["stocks"] = stocks
+    _cache["last_updated"] = datetime.now().isoformat()
+    _cache["is_live"] = False
+
+
+def get_market_overview() -> dict:
+    """Return current market data from cache."""
+    if not _cache["stocks"]:
+        _generate_synthetic_prices()
+
+    return {
+        "stocks": list(_cache["stocks"].values()),
+        "last_updated": _cache["last_updated"] or datetime.now().isoformat(),
+        "is_live": _cache["is_live"],
+    }
+
+
+def get_heatmap_data() -> dict:
+    """Return data formatted for treemap heatmap."""
+    if not _cache["stocks"]:
+        _generate_synthetic_prices()
+
+    entries = []
+    for ticker, data in _cache["stocks"].items():
+        entries.append({
+            "ticker": ticker,
+            "name": data.get("name", ticker),
+            "sector": data.get("sector", "Unknown"),
+            "market_cap": data.get("market_cap") or np.random.uniform(10e9, 3e12),
+            "daily_change": data.get("change_1d", 0),
+            "index": data.get("index", ""),
+        })
+
+    return {
+        "entries": entries,
+        "last_updated": _cache["last_updated"] or datetime.now().isoformat(),
+    }
+
+
+def get_sentiment() -> dict:
+    """Compute a simple fear/greed index from market data."""
+    if not _cache["stocks"]:
+        _generate_synthetic_prices()
+
+    changes = [s.get("change_1d", 0) for s in _cache["stocks"].values()]
+    if not changes:
+        return {"fear_greed_index": 50, "label": "Neutral", "components": {}}
+
+    avg_change = np.mean(changes)
+    positive_pct = sum(1 for c in changes if c > 0) / len(changes) * 100
+
+    # Simple index: 0 = extreme fear, 100 = extreme greed
+    index = int(np.clip(50 + avg_change * 10 + (positive_pct - 50) * 0.5, 0, 100))
+
+    if index <= 20:
+        label = "Extreme Fear"
+    elif index <= 40:
+        label = "Fear"
+    elif index <= 60:
+        label = "Neutral"
+    elif index <= 80:
+        label = "Greed"
+    else:
+        label = "Extreme Greed"
+
+    return {
+        "fear_greed_index": index,
+        "label": label,
+        "components": {
+            "avg_daily_change": round(avg_change, 2),
+            "positive_stocks_pct": round(positive_pct, 1),
+            "n_stocks_tracked": len(changes),
+        },
+    }
+
+
+def get_stock_price(ticker: str) -> Optional[dict]:
+    """Get cached price data for a single ticker."""
+    return _cache["stocks"].get(ticker)
+```
+
+
+================================================================================
+File: apps\api\services\pipeline.py
+================================================================================
+
+```python
+"""
+Pipeline service — orchestrates existing AHP modules.
+Extracted from webapp/app.py and main.py.
+"""
+
+import numpy as np
+import pandas as pd
+from datetime import datetime
+from typing import Optional
+
+from modules.questionnaire import QUESTIONS, PROFILES_ORDER, PROFILE_DESCRIPTIONS, score_answers
+from modules.profiles import get_profile_config, CRITERIA, CRITERIA_ORDER, PROFILE_WEIGHTS
+from modules.stock_analysis import compute_returns, analyze_stocks
+from modules.stock_filter import run_filtering
+from modules.portfolio_builder import build_portfolios
+from modules.ahp_engine_v2 import AHPEngine
+
+
+def generate_synthetic_data() -> dict:
+    """Generate synthetic market data for demo/fallback."""
+    np.random.seed(int(datetime.now().timestamp()) % 1000)
+    n_days = 504
+    dates = pd.bdate_range(start="2023-01-02", periods=n_days)
+
+    configs = {
+        "sp500": {
+            "AAPL": (0.12, 0.25), "MSFT": (0.18, 0.28), "NVDA": (0.25, 0.40),
+            "GOOGL": (0.15, 0.27), "AMZN": (0.16, 0.30), "META": (0.20, 0.35),
+            "JNJ": (0.05, 0.14), "PG": (0.04, 0.12), "JPM": (0.10, 0.22),
+            "XOM": (0.08, 0.24), "KO": (0.03, 0.11), "V": (0.11, 0.20),
+            "UNH": (0.09, 0.18), "HD": (0.10, 0.22), "MRK": (0.06, 0.17),
+            "COST": (0.13, 0.21), "AVGO": (0.22, 0.35), "LLY": (0.19, 0.30),
+        },
+        "eurostoxx": {
+            "SAP.DE": (0.14, 0.26), "SIE.DE": (0.08, 0.20), "SAN.MC": (0.06, 0.24),
+            "MC.PA": (0.11, 0.22), "TTE.PA": (0.07, 0.26), "ASML.AS": (0.20, 0.32),
+            "AIR.PA": (0.10, 0.24), "ALV.DE": (0.07, 0.18), "BNP.PA": (0.06, 0.22),
+            "OR.PA": (0.09, 0.19), "DTE.DE": (0.08, 0.16), "BBVA.MC": (0.11, 0.25),
+        },
+        "nikkei": {
+            "7203.T": (0.09, 0.22), "6758.T": (0.15, 0.30), "9984.T": (0.20, 0.35),
+            "4502.T": (0.04, 0.16), "8306.T": (0.07, 0.20), "8035.T": (0.18, 0.32),
+            "6861.T": (0.12, 0.25), "6902.T": (0.08, 0.19), "9433.T": (0.05, 0.14),
+            "7974.T": (0.14, 0.28),
+        },
+    }
+
+    all_prices, all_benchmarks = {}, {}
+    for idx, stocks in configs.items():
+        d = {}
+        for t, (mu, sig) in stocks.items():
+            r = np.random.normal(mu / 252, sig / np.sqrt(252), n_days)
+            d[t] = 100 * np.exp(np.cumsum(r))
+        all_prices[idx] = pd.DataFrame(d, index=dates)
+        bmu = np.mean([s[0] for s in stocks.values()])
+        bsig = np.mean([s[1] for s in stocks.values()]) * 0.7
+        br = np.random.normal(bmu / 252, bsig / np.sqrt(252), n_days)
+        all_benchmarks[idx] = pd.Series(1000 * np.exp(np.cumsum(br)), index=dates)
+
+    return {
+        "prices": all_prices,
+        "benchmarks": all_benchmarks,
+        "risk_free": {"sp500": 0.04, "eurostoxx": 0.025, "nikkei": 0.01},
+        "stock_info": None,
+        "metadata": {"indices": list(configs.keys()), "synthetic": True},
+    }
+
+
+def load_live_data() -> dict:
+    """Try loading real data from Yahoo Finance, fall back to synthetic."""
+    try:
+        from modules.data_loader import load_market_data
+        data = load_market_data(period_years=2, max_per_index=100, progress=False)
+        data["metadata"]["synthetic"] = False
+        return data
+    except Exception as e:
+        print(f"  Real data unavailable ({e}), using synthetic data")
+        return generate_synthetic_data()
+
+
+def run_analysis_pipeline(profile: str, use_live: bool = True) -> dict:
+    """
+    Run the full AHP pipeline (M2-M6) for a given profile.
+
+    Returns a dict matching the AnalysisResponse schema.
+    """
+    config = get_profile_config(profile)
+
+    # M2: Load data
+    market_data = load_live_data() if use_live else generate_synthetic_data()
+    is_synthetic = market_data["metadata"].get("synthetic", True)
+
+    # M3: Stock analysis
+    all_analyses = []
+    all_returns = {}
+    for idx in market_data["metadata"]["indices"]:
+        prices = market_data["prices"][idx]
+        benchmark = market_data["benchmarks"][idx]
+        rf = market_data["risk_free"][idx]
+        analysis = analyze_stocks(prices, benchmark, rf, idx, progress=False)
+        analysis["region"] = idx
+        all_analyses.append(analysis)
+        all_returns[idx] = compute_returns(prices)
+
+    consolidated = pd.concat(all_analyses)
+
+    # M4: Filtering
+    avg_rf = np.mean(list(market_data["risk_free"].values()))
+    market_vars = []
+    for idx in market_data["metadata"]["indices"]:
+        b = market_data["benchmarks"][idx]
+        br = np.log(b / b.shift(1)).dropna()
+        market_vars.append(br.var() * 252)
+
+    selected = run_filtering(
+        consolidated, config["filters"], avg_rf,
+        np.mean(market_vars), stock_info=None,
+        profile_name=profile, progress=False,
+    )
+
+    if selected.empty:
+        return {
+            "success": False,
+            "error": "No stocks passed the risk filters for this profile. Try adjusting your answers.",
+        }
+
+    # M5: Portfolio construction
+    all_ret = pd.concat(all_returns.values(), axis=1)
+    first_idx = market_data["metadata"]["indices"][0]
+    bench = market_data["benchmarks"][first_idx]
+    bench_ret = np.log(bench / bench.shift(1)).dropna()
+
+    best = build_portfolios(selected, all_ret, bench_ret, avg_rf, progress=False)
+
+    if best.empty:
+        return {
+            "success": False,
+            "error": "Could not generate portfolios with available stocks.",
+        }
+
+    # M6: AHP ranking
+    engine = AHPEngine(profile=profile)
+    ranking = engine.run(best, progress=False)
+
+    # Serialize results
+    weights = PROFILE_WEIGHTS[profile]
+    sorted_criteria = sorted(weights.items(), key=lambda x: -x[1])
+    top_criteria = [
+        {"name": CRITERIA[c]["label"], "weight": w, "direction": CRITERIA[c]["dir"]}
+        for c, w in sorted_criteria[:6]
+    ]
+
+    ranking_list = []
+    for _, row in ranking.iterrows():
+        ranking_list.append({
+            "name": row["portafolio"],
+            "score": round(row["score_pct"], 1),
+            "rank": int(row["ranking"]),
+        })
+
+    portfolios_detail = []
+    for pname, prow in best.iterrows():
+        portfolios_detail.append({
+            "name": pname,
+            "rentabilidad": round(float(prow.get("rentabilidad", 0)) * 100, 2),
+            "volatilidad": round(float(prow.get("volatilidad", 0)) * 100, 2),
+            "sharpe": round(float(prow.get("sharpe", 0)), 2),
+            "max_drawdown": round(float(prow.get("max_drawdown", 0)) * 100, 2),
+            "beta": round(float(prow.get("beta", 0)), 2),
+            "alpha": round(float(prow.get("alpha", 0)) * 100, 2),
+            "tickers": str(prow.get("tickers", "")),
+            "pesos": str(prow.get("pesos", "")),
+        })
+
+    stocks_list = []
+    for ticker, srow in selected.head(8).iterrows():
+        stocks_list.append({
+            "ticker": ticker,
+            "rentabilidad": round(float(srow["rentabilidad"]) * 100, 2),
+            "sharpe": round(float(srow["sharpe"]), 2),
+            "volatilidad": round(float(srow["volatilidad"]) * 100, 2),
+            "beta": round(float(srow["beta"]), 2),
+        })
+
+    winner = ranking_list[0]
+    winner_name = ranking.iloc[0]["portafolio"]
+    winner_data = best.loc[winner_name]
+
+    allocation = []
+    if "pesos" in winner_data and isinstance(winner_data["pesos"], str):
+        for pair in winner_data["pesos"].split(", "):
+            parts = pair.split(":")
+            if len(parts) == 2:
+                allocation.append({
+                    "ticker": parts[0].strip(),
+                    "weight": parts[1].strip(),
+                })
+
+    return {
+        "success": True,
+        "profile": profile,
+        "profile_description": PROFILE_DESCRIPTIONS[profile],
+        "scores": {},  # Not available without answers; populated by run_full_pipeline
+        "top_criteria": top_criteria,
+        "ranking": ranking_list,
+        "portfolios": portfolios_detail,
+        "stocks": stocks_list,
+        "winner": winner,
+        "allocation": allocation,
+        "n_stocks_analyzed": len(consolidated),
+        "n_stocks_selected": len(selected),
+        "consistency_ratio": round(engine.criteria_cr, 4),
+        "is_synthetic": is_synthetic,
+        # Store internal data for backtest/export
+        "_market_data": market_data,
+        "_consolidated": consolidated,
+        "_selected": selected,
+        "_best_portfolios": best,
+        "_ranking": ranking,
+        "_engine": engine,
+    }
+
+
+def run_full_pipeline(answers: dict[str, str], use_live: bool = True) -> dict:
+    """
+    Run the complete pipeline starting from questionnaire answers.
+    """
+    profile, scores = score_answers(answers)
+    result = run_analysis_pipeline(profile, use_live)
+
+    if result.get("success"):
+        result["scores"] = {k: v for k, v in scores.items() if v > 0}
+
+    return result
+```
+
+
+================================================================================
+File: apps\api\services\ws_manager.py
+================================================================================
+
+```python
+"""
+WebSocket connection manager for real-time price broadcasting.
+"""
+
+import json
+import asyncio
+from fastapi import WebSocket
+
+
+class ConnectionManager:
+    def __init__(self):
+        self.active_connections: list[WebSocket] = []
+        self.subscriptions: dict[WebSocket, set[str]] = {}
+
+    async def connect(self, websocket: WebSocket):
+        await websocket.accept()
+        self.active_connections.append(websocket)
+        self.subscriptions[websocket] = set()
+
+    def disconnect(self, websocket: WebSocket):
+        if websocket in self.active_connections:
+            self.active_connections.remove(websocket)
+        self.subscriptions.pop(websocket, None)
+
+    def subscribe(self, websocket: WebSocket, tickers: list[str]):
+        if websocket in self.subscriptions:
+            self.subscriptions[websocket].update(tickers)
+
+    def unsubscribe(self, websocket: WebSocket, tickers: list[str]):
+        if websocket in self.subscriptions:
+            self.subscriptions[websocket] -= set(tickers)
+
+    async def broadcast_price(self, ticker: str, data: dict):
+        """Send price update to all subscribers of this ticker."""
+        message = json.dumps({"type": "price_update", "ticker": ticker, **data})
+        disconnected = []
+
+        for ws in self.active_connections:
+            subs = self.subscriptions.get(ws, set())
+            if not subs or ticker in subs:  # Empty subs = subscribed to all
+                try:
+                    await ws.send_text(message)
+                except Exception:
+                    disconnected.append(ws)
+
+        for ws in disconnected:
+            self.disconnect(ws)
+
+    async def broadcast_all(self, stocks: dict):
+        """Broadcast all stock updates."""
+        for ticker, data in stocks.items():
+            await self.broadcast_price(ticker, data)
+
+
+manager = ConnectionManager()
+```
+
+
+================================================================================
+File: apps\api\services\__init__.py
+================================================================================
+
+```python
+
+```
+
+
+================================================================================
+File: apps\api\ws\prices.py
+================================================================================
+
+```python
+"""
+WebSocket endpoint for real-time price streaming.
+"""
+
+import json
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from apps.api.services.ws_manager import manager
+
+router = APIRouter()
+
+
+@router.websocket("/ws/prices")
+async def websocket_prices(websocket: WebSocket):
+    """
+    WebSocket endpoint for real-time price updates.
+
+    Client can send:
+      {"subscribe": ["AAPL", "MSFT"]}
+      {"unsubscribe": ["AAPL"]}
+
+    Server sends:
+      {"type": "price_update", "ticker": "AAPL", "price": 182.50, ...}
+    """
+    await manager.connect(websocket)
+    try:
+        while True:
+            data = await websocket.receive_text()
+            try:
+                msg = json.loads(data)
+                if "subscribe" in msg:
+                    manager.subscribe(websocket, msg["subscribe"])
+                    await websocket.send_text(json.dumps({
+                        "type": "subscribed",
+                        "tickers": list(manager.subscriptions.get(websocket, [])),
+                    }))
+                elif "unsubscribe" in msg:
+                    manager.unsubscribe(websocket, msg["unsubscribe"])
+            except json.JSONDecodeError:
+                pass
+    except WebSocketDisconnect:
+        manager.disconnect(websocket)
+```
+
+
+================================================================================
+File: apps\api\ws\__init__.py
+================================================================================
+
+```python
+
+```
+
+
+================================================================================
+File: apps\api\__init__.py
+================================================================================
+
+```python
+
+```
+
+
+================================================================================
+File: apps\web\src\app\backtest\page.tsx
+================================================================================
+
+```typescript
+"use client";
+
+import { useState } from "react";
+import { useProfileStore } from "../../hooks/useProfile";
+import { AppLayout } from "../../components/layout/AppLayout";
+import { Card } from "../../components/ui/Card";
+import { StatCard } from "../../components/ui/StatCard";
+import { Button } from "../../components/ui/Button";
+import { Badge } from "../../components/ui/Badge";
+import { EquityCurve } from "../../components/charts/EquityCurve";
+import { formatPercent } from "../../lib/formatters";
+import { runBacktest } from "../../lib/api";
+import type { BacktestResponse } from "../../types";
+import { useRouter } from "next/navigation";
+
+export default function BacktestPage() {
+  const router = useRouter();
+  const { analysisResult } = useProfileStore();
+  const [result, setResult] = useState<BacktestResponse | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  if (!analysisResult) {
+    return (
+      <AppLayout>
+        <div className="flex flex-col items-center justify-center h-[60vh] gap-4">
+          <p className="text-text-secondary text-lg">No analysis results yet.</p>
+          <button
+            onClick={() => router.push("/")}
+            className="text-accent-blue hover:underline cursor-pointer"
+          >
+            Take the questionnaire first
+          </button>
+        </div>
+      </AppLayout>
+    );
+  }
+
+  const { profile, winner, allocation } = analysisResult;
+
+  const handleRunBacktest = async () => {
+    setLoading(true);
+    setError(null);
+
+    const tickers = allocation.map((a) => a.ticker);
+    const weights: Record<string, number> = {};
+    allocation.forEach((a) => {
+      weights[a.ticker] = parseFloat(a.weight.replace("%", "")) / 100;
+    });
+
+    try {
+      const res = await runBacktest(tickers, weights, profile);
+      if (res.success) {
+        setResult(res);
+      } else {
+        setError(res.error || "Backtest failed");
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Backtest failed");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const test = result?.test_metrics;
+  const train = result?.train_metrics;
+
+  return (
+    <AppLayout>
+      <div className="flex items-center justify-between mb-8">
+        <div>
+          <h1 className="text-2xl font-bold">Backtesting</h1>
+          <p className="text-text-secondary text-sm mt-1">
+            Historical performance validation — {winner.name}
+          </p>
+        </div>
+        <Button onClick={handleRunBacktest} disabled={loading}>
+          {loading ? "Running backtest..." : "Run Backtest"}
+        </Button>
+      </div>
+
+      {/* Portfolio being tested */}
+      <Card className="mb-8">
+        <h3 className="text-sm text-text-secondary uppercase mb-2">Testing Portfolio</h3>
+        <div className="flex items-center gap-3 flex-wrap">
+          <span className="text-lg font-bold">{winner.name}</span>
+          {allocation.map((a) => (
+            <Badge key={a.ticker} color="blue">
+              {a.ticker}: {a.weight}
+            </Badge>
+          ))}
+        </div>
+      </Card>
+
+      {error && (
+        <Card className="mb-8 border-accent-red/30 bg-accent-red/5">
+          <p className="text-accent-red text-sm">{error}</p>
+        </Card>
+      )}
+
+      {result && (
+        <>
+          {/* Stat Cards */}
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+            <StatCard
+              label="Test Return"
+              value={formatPercent(test?.total_return ?? 0)}
+              subtitle="Out-of-sample"
+              color={(test?.total_return ?? 0) >= 0 ? "green" : "red"}
+            />
+            <StatCard
+              label="Test Sharpe"
+              value={(test?.sharpe ?? 0).toFixed(3)}
+              color="blue"
+            />
+            <StatCard
+              label="Test Max DD"
+              value={formatPercent(test?.max_drawdown ?? 0)}
+              color="red"
+            />
+            <StatCard
+              label="Beat Benchmark"
+              value={test?.beat_benchmark ? "YES" : "NO"}
+              color={test?.beat_benchmark ? "green" : "red"}
+            />
+          </div>
+
+          {/* Equity Curve */}
+          <Card className="mb-8">
+            <h3 className="text-lg font-semibold mb-4">Equity Curve</h3>
+            <EquityCurve
+              data={result.portfolio_series}
+              benchmarkData={result.benchmark_series}
+              height={350}
+            />
+            <div className="flex items-center gap-6 mt-3">
+              <div className="flex items-center gap-2">
+                <div className="w-4 h-0.5 bg-accent-green" />
+                <span className="text-xs text-text-secondary">Portfolio</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="w-4 h-0.5 bg-text-secondary border-t border-dashed" />
+                <span className="text-xs text-text-secondary">Benchmark</span>
+              </div>
+            </div>
+          </Card>
+
+          {/* Train vs Test Comparison */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <Card>
+              <h3 className="text-lg font-semibold mb-4">
+                Training Period <Badge color="blue">70%</Badge>
+              </h3>
+              <div className="space-y-3">
+                {train && (
+                  <>
+                    <MetricRow label="Total Return" value={formatPercent(train.total_return)} positive={train.total_return >= 0} />
+                    <MetricRow label="Annualized Return" value={formatPercent(train.annualized_return)} positive={train.annualized_return >= 0} />
+                    <MetricRow label="Volatility" value={formatPercent(train.volatility)} />
+                    <MetricRow label="Sharpe Ratio" value={train.sharpe.toFixed(3)} />
+                    <MetricRow label="Sortino Ratio" value={train.sortino.toFixed(3)} />
+                    <MetricRow label="Max Drawdown" value={formatPercent(train.max_drawdown)} positive={false} />
+                    <MetricRow label="Beta" value={train.beta.toFixed(3)} />
+                    <MetricRow label="Alpha" value={formatPercent(train.alpha)} positive={train.alpha >= 0} />
+                  </>
+                )}
+              </div>
+            </Card>
+
+            <Card>
+              <h3 className="text-lg font-semibold mb-4">
+                Testing Period <Badge color="gold">30%</Badge>
+              </h3>
+              <div className="space-y-3">
+                {test && (
+                  <>
+                    <MetricRow label="Total Return" value={formatPercent(test.total_return)} positive={test.total_return >= 0} />
+                    <MetricRow label="Annualized Return" value={formatPercent(test.annualized_return)} positive={test.annualized_return >= 0} />
+                    <MetricRow label="Volatility" value={formatPercent(test.volatility)} />
+                    <MetricRow label="Sharpe Ratio" value={test.sharpe.toFixed(3)} />
+                    <MetricRow label="Sortino Ratio" value={test.sortino.toFixed(3)} />
+                    <MetricRow label="Max Drawdown" value={formatPercent(test.max_drawdown)} positive={false} />
+                    <MetricRow label="Beta" value={test.beta.toFixed(3)} />
+                    <MetricRow label="Alpha" value={formatPercent(test.alpha)} positive={test.alpha >= 0} />
+                  </>
+                )}
+              </div>
+            </Card>
+          </div>
+        </>
+      )}
+    </AppLayout>
+  );
+}
+
+function MetricRow({
+  label,
+  value,
+  positive,
+}: {
+  label: string;
+  value: string;
+  positive?: boolean;
+}) {
+  return (
+    <div className="flex items-center justify-between">
+      <span className="text-sm text-text-secondary">{label}</span>
+      <span
+        className={`text-sm font-mono font-medium ${
+          positive === undefined
+            ? "text-text-primary"
+            : positive
+            ? "text-accent-green"
+            : "text-accent-red"
+        }`}
+      >
+        {value}
+      </span>
+    </div>
+  );
+}
+```
+
+
+================================================================================
+File: apps\web\src\app\dashboard\page.tsx
+================================================================================
+
+```typescript
+"use client";
+
+import { useProfileStore } from "../../hooks/useProfile";
+import { AppLayout } from "../../components/layout/AppLayout";
+import { StatCard } from "../../components/ui/StatCard";
+import { Card } from "../../components/ui/Card";
+import { Badge } from "../../components/ui/Badge";
+import { AllocationPie } from "../../components/charts/AllocationPie";
+import { PROFILE_COLORS, PROFILE_LABELS, RANKING_COLORS } from "../../lib/constants";
+import { formatPercent } from "../../lib/formatters";
+import { useRouter } from "next/navigation";
+
+export default function DashboardPage() {
+  const router = useRouter();
+  const { analysisResult, profileResult } = useProfileStore();
+
+  if (!analysisResult) {
+    return (
+      <AppLayout>
+        <div className="flex flex-col items-center justify-center h-[60vh] gap-4">
+          <p className="text-text-secondary text-lg">No analysis results yet.</p>
+          <button
+            onClick={() => router.push("/")}
+            className="text-accent-blue hover:underline cursor-pointer"
+          >
+            Take the questionnaire first
+          </button>
+        </div>
+      </AppLayout>
+    );
+  }
+
+  const {
+    profile,
+    winner,
+    ranking,
+    portfolios,
+    allocation,
+    n_stocks_analyzed,
+    n_stocks_selected,
+    consistency_ratio,
+    is_synthetic,
+    top_criteria,
+  } = analysisResult;
+
+  const winnerPortfolio = portfolios.find((p) => p.name === winner.name);
+  const profileColor = PROFILE_COLORS[profile] || "#3b82f6";
+
+  return (
+    <AppLayout>
+      {/* Header */}
+      <div className="flex items-center justify-between mb-8">
+        <div>
+          <h1 className="text-2xl font-bold">Dashboard</h1>
+          <p className="text-text-secondary text-sm mt-1">
+            Profile:{" "}
+            <span style={{ color: profileColor }}>
+              {PROFILE_LABELS[profile] || profile}
+            </span>
+          </p>
+        </div>
+        <div className="flex items-center gap-3">
+          <Badge color={is_synthetic ? "gold" : "green"}>
+            {is_synthetic ? "Synthetic Data" : "Live Data"}
+          </Badge>
+          <Badge color="blue">CR: {consistency_ratio}</Badge>
+        </div>
+      </div>
+
+      {/* Stat Cards */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 xl:grid-cols-6 gap-4 mb-8">
+        <StatCard
+          label="AHP Score"
+          value={`${winner.score}%`}
+          subtitle={`Winner: ${winner.name}`}
+          color="gold"
+        />
+        <StatCard
+          label="Return"
+          value={formatPercent(winnerPortfolio?.rentabilidad ?? 0)}
+          subtitle="Annualized"
+          color={(winnerPortfolio?.rentabilidad ?? 0) >= 0 ? "green" : "red"}
+        />
+        <StatCard
+          label="Sharpe"
+          value={winnerPortfolio?.sharpe.toFixed(2) ?? "—"}
+          subtitle="Risk-adjusted"
+          color="blue"
+        />
+        <StatCard
+          label="Alpha"
+          value={formatPercent(winnerPortfolio?.alpha ?? 0)}
+          subtitle="Jensen's Alpha"
+          color={(winnerPortfolio?.alpha ?? 0) >= 0 ? "green" : "red"}
+        />
+        <StatCard
+          label="Stocks Analyzed"
+          value={String(n_stocks_analyzed)}
+          subtitle={`${n_stocks_selected} selected`}
+        />
+        <StatCard
+          label="Max Drawdown"
+          value={formatPercent(winnerPortfolio?.max_drawdown ?? 0)}
+          subtitle="Worst decline"
+          color="red"
+        />
+      </div>
+
+      {/* Main Content Grid */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
+        {/* AHP Ranking */}
+        <Card className="lg:col-span-2">
+          <h3 className="text-lg font-semibold mb-4">AHP Ranking</h3>
+          <div className="space-y-3">
+            {ranking.map((entry, i) => (
+              <div key={entry.name} className="flex items-center gap-4">
+                <span
+                  className="text-lg font-bold w-8 text-center"
+                  style={{ color: RANKING_COLORS[i] || "#6b7280" }}
+                >
+                  #{entry.rank}
+                </span>
+                <div className="flex-1">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-sm font-medium">{entry.name}</span>
+                    <span className="text-sm text-text-secondary">
+                      {entry.score}%
+                    </span>
+                  </div>
+                  <div className="h-3 bg-bg-tertiary rounded-full overflow-hidden">
+                    <div
+                      className="h-full rounded-full transition-all duration-700"
+                      style={{
+                        width: `${entry.score * 2}%`,
+                        backgroundColor: RANKING_COLORS[i] || "#6b7280",
+                      }}
+                    />
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </Card>
+
+        {/* Allocation */}
+        <Card>
+          <h3 className="text-lg font-semibold mb-4">
+            Winner Allocation ({winner.name})
+          </h3>
+          {allocation.length > 0 ? (
+            <AllocationPie allocation={allocation} />
+          ) : (
+            <p className="text-text-secondary text-sm">No allocation data</p>
+          )}
+        </Card>
+      </div>
+
+      {/* Criteria & Portfolios */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Top Criteria */}
+        <Card>
+          <h3 className="text-lg font-semibold mb-4">Top AHP Criteria</h3>
+          <div className="space-y-3">
+            {top_criteria.map((c) => (
+              <div key={c.name} className="flex items-center gap-3">
+                <div className="flex-1">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-sm">{c.name}</span>
+                    <div className="flex items-center gap-2">
+                      <Badge color={c.direction === "maximize" ? "green" : "red"}>
+                        {c.direction === "maximize" ? "MAX" : "MIN"}
+                      </Badge>
+                      <span className="text-xs text-text-secondary">{c.weight}/9</span>
+                    </div>
+                  </div>
+                  <div className="h-2 bg-bg-tertiary rounded-full overflow-hidden">
+                    <div
+                      className="h-full rounded-full bg-accent-blue"
+                      style={{ width: `${(c.weight / 9) * 100}%` }}
+                    />
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </Card>
+
+        {/* Portfolios Table */}
+        <Card>
+          <h3 className="text-lg font-semibold mb-4">Portfolio Candidates</h3>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-text-secondary text-xs uppercase">
+                  <th className="text-left pb-3">Name</th>
+                  <th className="text-right pb-3">Return</th>
+                  <th className="text-right pb-3">Sharpe</th>
+                  <th className="text-right pb-3">Vol</th>
+                  <th className="text-right pb-3">Beta</th>
+                </tr>
+              </thead>
+              <tbody>
+                {portfolios.map((p) => (
+                  <tr
+                    key={p.name}
+                    className={`border-t border-border/50 ${
+                      p.name === winner.name ? "bg-accent-gold/5" : ""
+                    }`}
+                  >
+                    <td className="py-2.5 font-medium">
+                      {p.name}
+                      {p.name === winner.name && (
+                        <span className="ml-2 text-accent-gold text-xs">Winner</span>
+                      )}
+                    </td>
+                    <td
+                      className={`text-right ${
+                        p.rentabilidad >= 0 ? "text-accent-green" : "text-accent-red"
+                      }`}
+                    >
+                      {formatPercent(p.rentabilidad)}
+                    </td>
+                    <td className="text-right">{p.sharpe.toFixed(2)}</td>
+                    <td className="text-right text-text-secondary">
+                      {p.volatilidad.toFixed(1)}%
+                    </td>
+                    <td className="text-right text-text-secondary">
+                      {p.beta.toFixed(2)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      </div>
+    </AppLayout>
+  );
+}
+```
+
+
+================================================================================
+File: apps\web\src\app\globals.css
+================================================================================
+
+```css
+@import "tailwindcss";
+
+:root {
+  --bg-primary: #0d1117;
+  --bg-secondary: #161b22;
+  --bg-tertiary: #21262d;
+  --border: #30363d;
+  --text-primary: #f0f6fc;
+  --text-secondary: #8b949e;
+  --accent-green: #22c55e;
+  --accent-red: #ef4444;
+  --accent-blue: #3b82f6;
+  --accent-gold: #f59e0b;
+}
+
+@theme inline {
+  --color-bg-primary: var(--bg-primary);
+  --color-bg-secondary: var(--bg-secondary);
+  --color-bg-tertiary: var(--bg-tertiary);
+  --color-border: var(--border);
+  --color-text-primary: var(--text-primary);
+  --color-text-secondary: var(--text-secondary);
+  --color-accent-green: var(--accent-green);
+  --color-accent-red: var(--accent-red);
+  --color-accent-blue: var(--accent-blue);
+  --color-accent-gold: var(--accent-gold);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--bg-tertiary) var(--bg-primary);
+}
+
+body {
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: var(--font-sans), Arial, Helvetica, sans-serif;
+}
+
+/* Glassmorphism utility */
+.glass {
+  background: rgba(22, 27, 34, 0.8);
+  backdrop-filter: blur(12px);
+  border: 1px solid var(--border);
+}
+
+/* Price flash animations */
+@keyframes flash-green {
+  0% { background-color: rgba(34, 197, 94, 0.3); }
+  100% { background-color: transparent; }
+}
+
+@keyframes flash-red {
+  0% { background-color: rgba(239, 68, 68, 0.3); }
+  100% { background-color: transparent; }
+}
+
+.flash-positive {
+  animation: flash-green 0.8s ease-out;
+}
+
+.flash-negative {
+  animation: flash-red 0.8s ease-out;
+}
+
+/* Live indicator pulse */
+@keyframes pulse-live {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+.pulse-live {
+  animation: pulse-live 2s ease-in-out infinite;
+}
+```
+
+
+================================================================================
+File: apps\web\src\app\heatmap\page.tsx
+================================================================================
+
+```typescript
+"use client";
+
+import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { getHeatmapData } from "../../lib/api";
+import { AppLayout } from "../../components/layout/AppLayout";
+import { INDEX_LABELS } from "../../lib/constants";
+import { formatPercent } from "../../lib/formatters";
+import Link from "next/link";
+
+function getHeatColor(change: number): string {
+  if (change <= -5) return "#991b1b";
+  if (change <= -3) return "#b91c1c";
+  if (change <= -1) return "#dc2626";
+  if (change < 0) return "#ef4444";
+  if (change === 0) return "#374151";
+  if (change < 1) return "#22c55e";
+  if (change < 3) return "#16a34a";
+  if (change < 5) return "#15803d";
+  return "#166534";
+}
+
+export default function HeatmapPage() {
+  const [filter, setFilter] = useState<string>("all");
+
+  const { data, isLoading } = useQuery({
+    queryKey: ["heatmap"],
+    queryFn: getHeatmapData,
+    refetchInterval: 30000,
+  });
+
+  const entries = (data?.entries ?? []).filter(
+    (e) => filter === "all" || e.index === filter
+  );
+
+  // Sort by market cap for visual sizing
+  const sorted = [...entries].sort((a, b) => (b.market_cap || 0) - (a.market_cap || 0));
+
+  // Compute relative sizes
+  const totalCap = sorted.reduce((sum, e) => sum + (e.market_cap || 1), 0);
+
+  return (
+    <AppLayout>
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h1 className="text-2xl font-bold">Market Heatmap</h1>
+          <p className="text-text-secondary text-sm mt-1">
+            Stock performance by market cap
+          </p>
+        </div>
+      </div>
+
+      {/* Filter tabs */}
+      <div className="flex gap-2 mb-6">
+        {["all", "sp500", "eurostoxx", "nikkei"].map((idx) => (
+          <button
+            key={idx}
+            onClick={() => setFilter(idx)}
+            className={`px-4 py-2 rounded-lg text-sm transition-colors cursor-pointer ${
+              filter === idx
+                ? "bg-accent-blue text-white"
+                : "bg-bg-secondary text-text-secondary hover:bg-bg-tertiary"
+            }`}
+          >
+            {idx === "all" ? "All" : INDEX_LABELS[idx] || idx}
+          </button>
+        ))}
+      </div>
+
+      {/* Heatmap Grid */}
+      {isLoading ? (
+        <div className="h-[60vh] flex items-center justify-center text-text-secondary">
+          Loading heatmap...
+        </div>
+      ) : (
+        <div className="flex flex-wrap gap-1 min-h-[60vh]">
+          {sorted.map((entry) => {
+            const pct = Math.max((entry.market_cap || 1) / totalCap * 100, 2);
+            const size = Math.max(Math.sqrt(pct) * 40, 80);
+
+            return (
+              <Link
+                key={entry.ticker}
+                href={`/stocks/${entry.ticker}`}
+                className="flex flex-col items-center justify-center rounded-lg transition-all duration-200 hover:ring-2 hover:ring-white/20 hover:scale-105"
+                style={{
+                  backgroundColor: getHeatColor(entry.daily_change),
+                  width: `${size}px`,
+                  height: `${size}px`,
+                  minWidth: "80px",
+                  minHeight: "80px",
+                  flexGrow: pct,
+                }}
+              >
+                <span className="text-white font-bold text-sm">
+                  {entry.ticker.replace(".T", "").replace(".DE", "").replace(".PA", "").replace(".MC", "").replace(".AS", "")}
+                </span>
+                <span
+                  className={`text-xs font-medium ${
+                    entry.daily_change >= 0 ? "text-green-200" : "text-red-200"
+                  }`}
+                >
+                  {formatPercent(entry.daily_change)}
+                </span>
+              </Link>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Legend */}
+      <div className="flex items-center justify-center gap-1 mt-6">
+        {[-5, -3, -1, 0, 1, 3, 5].map((v) => (
+          <div key={v} className="flex flex-col items-center">
+            <div
+              className="w-8 h-4 rounded-sm"
+              style={{ backgroundColor: getHeatColor(v) }}
+            />
+            <span className="text-[10px] text-text-secondary mt-1">{v}%</span>
+          </div>
+        ))}
+      </div>
+    </AppLayout>
+  );
+}
+```
+
+
+================================================================================
+File: apps\web\src\app\layout.tsx
+================================================================================
+
+```typescript
+import type { Metadata } from "next";
+import { Geist, Geist_Mono } from "next/font/google";
+import "./globals.css";
+import { Providers } from "./providers";
+
+const geistSans = Geist({
+  variable: "--font-geist-sans",
+  subsets: ["latin"],
+});
+
+const geistMono = Geist_Mono({
+  variable: "--font-geist-mono",
+  subsets: ["latin"],
+});
+
+export const metadata: Metadata = {
+  title: "AHP Portfolio Selector",
+  description: "Real-time investor platform with AHP multi-criteria portfolio selection",
+};
+
+export default function RootLayout({
+  children,
+}: Readonly<{
+  children: React.ReactNode;
+}>) {
+  return (
+    <html
+      lang="en"
+      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased dark`}
+    >
+      <body className="min-h-full flex flex-col bg-bg-primary text-text-primary">
+        <Providers>{children}</Providers>
+      </body>
+    </html>
+  );
+}
+```
+
+
+================================================================================
+File: apps\web\src\app\market\page.tsx
+================================================================================
+
+```typescript
+"use client";
+
+import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { getMarketOverview, getSentiment } from "../../lib/api";
+import { AppLayout } from "../../components/layout/AppLayout";
+import { Card } from "../../components/ui/Card";
+import { Badge } from "../../components/ui/Badge";
+import { StatCardSkeleton } from "../../components/ui/Skeleton";
+import { SparklineChart } from "../../components/charts/SparklineChart";
+import { FearGreedGauge } from "../../components/market/FearGreedGauge";
+import { formatPercent, formatPrice, formatMarketCap } from "../../lib/formatters";
+import { INDEX_LABELS } from "../../lib/constants";
+import Link from "next/link";
+
+export default function MarketPage() {
+  const [filter, setFilter] = useState<string>("all");
+  const [sortBy, setSortBy] = useState<string>("change_1d");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+
+  const { data: marketData, isLoading } = useQuery({
+    queryKey: ["market-overview"],
+    queryFn: getMarketOverview,
+    refetchInterval: 30000,
+  });
+
+  const { data: sentiment } = useQuery({
+    queryKey: ["sentiment"],
+    queryFn: getSentiment,
+    refetchInterval: 60000,
+  });
+
+  const stocks = marketData?.stocks ?? [];
+
+  const filteredStocks = stocks
+    .filter((s) => filter === "all" || s.index === filter)
+    .sort((a, b) => {
+      const aVal = (a[sortBy as keyof typeof a] as number) ?? 0;
+      const bVal = (b[sortBy as keyof typeof b] as number) ?? 0;
+      return sortDir === "desc" ? bVal - aVal : aVal - bVal;
+    });
+
+  const handleSort = (col: string) => {
+    if (sortBy === col) {
+      setSortDir(sortDir === "desc" ? "asc" : "desc");
+    } else {
+      setSortBy(col);
+      setSortDir("desc");
+    }
+  };
+
+  return (
+    <AppLayout>
+      {/* Header */}
+      <div className="flex items-center justify-between mb-8">
+        <div>
+          <h1 className="text-2xl font-bold">Market Overview</h1>
+          <p className="text-text-secondary text-sm mt-1">
+            {stocks.length} stocks tracked
+            {marketData?.is_live && (
+              <span className="ml-2 inline-flex items-center gap-1">
+                <span className="w-2 h-2 rounded-full bg-accent-green pulse-live" />
+                <span className="text-accent-green text-xs">Live</span>
+              </span>
+            )}
+          </p>
+        </div>
+      </div>
+
+      {/* Sentiment + Filters row */}
+      <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 mb-8">
+        {/* Fear & Greed */}
+        <Card className="flex items-center justify-center">
+          {sentiment ? (
+            <FearGreedGauge
+              value={sentiment.fear_greed_index}
+              label={sentiment.label}
+            />
+          ) : (
+            <StatCardSkeleton />
+          )}
+        </Card>
+
+        {/* Quick stats */}
+        <Card>
+          <span className="text-xs text-text-secondary uppercase">Positive Stocks</span>
+          <p className="text-2xl font-bold text-accent-green mt-1">
+            {stocks.filter((s) => s.change_1d > 0).length}
+          </p>
+          <span className="text-xs text-text-secondary">
+            of {stocks.length} total
+          </span>
+        </Card>
+        <Card>
+          <span className="text-xs text-text-secondary uppercase">Negative Stocks</span>
+          <p className="text-2xl font-bold text-accent-red mt-1">
+            {stocks.filter((s) => s.change_1d < 0).length}
+          </p>
+          <span className="text-xs text-text-secondary">
+            of {stocks.length} total
+          </span>
+        </Card>
+        <Card>
+          <span className="text-xs text-text-secondary uppercase">Avg Change</span>
+          <p className={`text-2xl font-bold mt-1 ${
+            (sentiment?.components?.avg_daily_change ?? 0) >= 0
+              ? "text-accent-green"
+              : "text-accent-red"
+          }`}>
+            {formatPercent(sentiment?.components?.avg_daily_change ?? 0)}
+          </p>
+          <span className="text-xs text-text-secondary">Today</span>
+        </Card>
+      </div>
+
+      {/* Filter tabs */}
+      <div className="flex gap-2 mb-4">
+        {["all", "sp500", "eurostoxx", "nikkei"].map((idx) => (
+          <button
+            key={idx}
+            onClick={() => setFilter(idx)}
+            className={`px-4 py-2 rounded-lg text-sm transition-colors cursor-pointer ${
+              filter === idx
+                ? "bg-accent-blue text-white"
+                : "bg-bg-secondary text-text-secondary hover:bg-bg-tertiary"
+            }`}
+          >
+            {idx === "all" ? "All" : INDEX_LABELS[idx] || idx}
+          </button>
+        ))}
+      </div>
+
+      {/* Stock Table */}
+      <Card className="overflow-hidden p-0">
+        {isLoading ? (
+          <div className="p-8 text-center text-text-secondary">Loading market data...</div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-text-secondary text-xs uppercase border-b border-border">
+                  <th className="text-left px-4 py-3">#</th>
+                  <th className="text-left px-4 py-3">Ticker</th>
+                  <th
+                    className="text-right px-4 py-3 cursor-pointer hover:text-text-primary"
+                    onClick={() => handleSort("price")}
+                  >
+                    Price {sortBy === "price" && (sortDir === "desc" ? "↓" : "↑")}
+                  </th>
+                  <th
+                    className="text-right px-4 py-3 cursor-pointer hover:text-text-primary"
+                    onClick={() => handleSort("change_1d")}
+                  >
+                    24h % {sortBy === "change_1d" && (sortDir === "desc" ? "↓" : "↑")}
+                  </th>
+                  <th
+                    className="text-right px-4 py-3 cursor-pointer hover:text-text-primary"
+                    onClick={() => handleSort("change_7d")}
+                  >
+                    7d % {sortBy === "change_7d" && (sortDir === "desc" ? "↓" : "↑")}
+                  </th>
+                  <th className="text-center px-4 py-3">7d Chart</th>
+                  <th className="text-right px-4 py-3">Market Cap</th>
+                  <th className="text-right px-4 py-3">Index</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredStocks.map((stock, i) => (
+                  <tr
+                    key={stock.ticker}
+                    className="border-t border-border/30 hover:bg-bg-tertiary/50 transition-colors"
+                  >
+                    <td className="px-4 py-3 text-text-secondary">{i + 1}</td>
+                    <td className="px-4 py-3">
+                      <Link
+                        href={`/stocks/${stock.ticker}`}
+                        className="font-medium text-text-primary hover:text-accent-blue transition-colors"
+                      >
+                        {stock.ticker}
+                      </Link>
+                    </td>
+                    <td className="px-4 py-3 text-right font-mono">
+                      ${formatPrice(stock.price)}
+                    </td>
+                    <td
+                      className={`px-4 py-3 text-right font-medium ${
+                        stock.change_1d >= 0 ? "text-accent-green" : "text-accent-red"
+                      }`}
+                    >
+                      {formatPercent(stock.change_1d)}
+                    </td>
+                    <td
+                      className={`px-4 py-3 text-right ${
+                        stock.change_7d >= 0 ? "text-accent-green" : "text-accent-red"
+                      }`}
+                    >
+                      {formatPercent(stock.change_7d)}
+                    </td>
+                    <td className="px-4 py-3 text-center">
+                      <div className="flex justify-center">
+                        <SparklineChart data={stock.sparkline} width={80} height={24} />
+                      </div>
+                    </td>
+                    <td className="px-4 py-3 text-right text-text-secondary">
+                      {formatMarketCap(stock.market_cap)}
+                    </td>
+                    <td className="px-4 py-3 text-right">
+                      <Badge color="gray">
+                        {INDEX_LABELS[stock.index] || stock.index}
+                      </Badge>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
+    </AppLayout>
+  );
+}
+```
+
+
+================================================================================
+File: apps\web\src\app\page.tsx
+================================================================================
+
+```typescript
+"use client";
+
+import { useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
+import { motion, AnimatePresence } from "framer-motion";
+import { useQuery } from "@tanstack/react-query";
+import { getQuestions, submitQuestionnaire, runAnalysis } from "../lib/api";
+import { useProfileStore } from "../hooks/useProfile";
+import { Button } from "../components/ui/Button";
+import { Progress } from "../components/ui/Progress";
+import { PROFILE_COLORS, PROFILE_LABELS } from "../lib/constants";
+
+export default function QuestionnairePage() {
+  const router = useRouter();
+  const [currentQ, setCurrentQ] = useState(0);
+  const [showReveal, setShowReveal] = useState(false);
+  const {
+    answers,
+    setAnswer,
+    clearAnswers,
+    profileResult,
+    setProfileResult,
+    setAnalysisResult,
+    isAnalyzing,
+    setIsAnalyzing,
+  } = useProfileStore();
+
+  const { data: questionsData, isLoading, isError } = useQuery({
+    queryKey: ["questions"],
+    queryFn: getQuestions,
+    retry: 2,
+  });
+
+  const questions = questionsData?.questions ?? [];
+  const currentQuestion = questions[currentQ];
+  const totalQuestions = questions.length;
+  const progress = totalQuestions > 0 ? ((currentQ + 1) / totalQuestions) * 100 : 0;
+  const allAnswered = questions.length > 0 && questions.every((q) => answers[q.id]);
+
+  // Clear stale answers when question IDs change (e.g. after a questionnaire update)
+  useEffect(() => {
+    if (questions.length === 0) return;
+    const questionIds = new Set(questions.map((q) => q.id));
+    const hasStale = Object.keys(answers).some((id) => !questionIds.has(id));
+    if (hasStale) clearAnswers();
+  }, [questions]);
+
+  const handleSelect = (questionId: string, letter: string) => {
+    setAnswer(questionId, letter);
+    if (currentQ < totalQuestions - 1) {
+      setTimeout(() => setCurrentQ(currentQ + 1), 300);
+    }
+  };
+
+  const handleSubmit = async () => {
+    try {
+      const result = await submitQuestionnaire(answers);
+      setProfileResult(result);
+      setShowReveal(true);
+
+      setIsAnalyzing(true);
+      try {
+        const analysis = await runAnalysis(result.profile, true);
+        setAnalysisResult(analysis);
+      } catch {
+        const analysis = await runAnalysis(result.profile, false);
+        setAnalysisResult(analysis);
+      } finally {
+        setIsAnalyzing(false);
+      }
+    } catch (error) {
+      console.error("Error submitting:", error);
+    }
+  };
+
+  const handleGoToDashboard = () => {
+    router.push("/dashboard");
+  };
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-bg-primary">
+        <div className="flex flex-col items-center gap-4">
+          <div className="w-12 h-12 border-4 border-accent-blue border-t-transparent rounded-full animate-spin" />
+          <p className="text-text-secondary">Cargando cuestionario...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (isError) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-bg-primary">
+        <div className="flex flex-col items-center gap-4 text-center px-4">
+          <p className="text-accent-red font-medium">No se pudo conectar con el servidor.</p>
+          <p className="text-text-secondary text-sm">
+            Asegúrate de que el backend está corriendo en el puerto 8000 y recarga la página.
+          </p>
+          <button
+            onClick={() => window.location.reload()}
+            className="mt-2 px-4 py-2 bg-accent-blue text-white rounded-lg text-sm cursor-pointer"
+          >
+            Reintentar
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // Profile reveal screen
+  if (showReveal && profileResult) {
+    const profileColor = PROFILE_COLORS[profileResult.profile] || "#3b82f6";
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-bg-primary px-4">
+        <motion.div
+          initial={{ scale: 0.8, opacity: 0 }}
+          animate={{ scale: 1, opacity: 1 }}
+          transition={{ duration: 0.6, ease: "easeOut" }}
+          className="max-w-lg w-full"
+        >
+          <div
+            className="rounded-2xl p-8 text-center border border-border"
+            style={{ background: `linear-gradient(135deg, ${profileColor}20, ${profileColor}05)` }}
+          >
+            <motion.div
+              initial={{ y: 20, opacity: 0 }}
+              animate={{ y: 0, opacity: 1 }}
+              transition={{ delay: 0.3 }}
+            >
+              <p className="text-sm text-text-secondary uppercase tracking-widest mb-2">
+                Your Investor Profile
+              </p>
+              <h1
+                className="text-5xl font-bold mb-4"
+                style={{ color: profileColor }}
+              >
+                {PROFILE_LABELS[profileResult.profile] || profileResult.profile}
+              </h1>
+              <p className="text-text-secondary text-sm leading-relaxed mb-8">
+                {profileResult.description}
+              </p>
+
+              <div className="space-y-2 mb-8">
+                {Object.entries(profileResult.scores)
+                  .sort(([, a], [, b]) => b - a)
+                  .slice(0, 4)
+                  .map(([name, score]) => (
+                    <div key={name} className="flex items-center gap-3">
+                      <span className="text-xs text-text-secondary w-24 text-right">
+                        {PROFILE_LABELS[name] || name}
+                      </span>
+                      <div className="flex-1 h-2 bg-bg-tertiary rounded-full overflow-hidden">
+                        <motion.div
+                          initial={{ width: 0 }}
+                          animate={{ width: `${(score / 50) * 100}%` }}
+                          transition={{ delay: 0.5, duration: 0.8 }}
+                          className="h-full rounded-full"
+                          style={{
+                            backgroundColor:
+                              name === profileResult.profile ? profileColor : "#30363d",
+                          }}
+                        />
+                      </div>
+                      <span className="text-xs text-text-secondary w-8">{score}pts</span>
+                    </div>
+                  ))}
+              </div>
+
+              {isAnalyzing ? (
+                <div className="flex flex-col items-center gap-3">
+                  <div className="w-8 h-8 border-3 border-accent-blue border-t-transparent rounded-full animate-spin" />
+                  <p className="text-sm text-text-secondary">
+                    Analyzing markets and building your portfolio...
+                  </p>
+                </div>
+              ) : (
+                <Button size="lg" onClick={handleGoToDashboard}>
+                  View Your Dashboard
+                </Button>
+              )}
+            </motion.div>
+          </div>
+        </motion.div>
+      </div>
+    );
+  }
+
+  // Questionnaire
+  return (
+    <div className="min-h-screen flex flex-col items-center justify-center bg-bg-primary px-4">
+      <div className="w-full max-w-xl mb-8">
+        <div className="flex items-center justify-between mb-3">
+          <h1 className="text-lg font-semibold">AHP Portfolio Selector</h1>
+          <span className="text-sm text-text-secondary">
+            {currentQ + 1} / {totalQuestions}
+          </span>
+        </div>
+        <Progress value={progress} />
+      </div>
+
+      <div className="w-full max-w-xl">
+        <AnimatePresence mode="wait">
+          {currentQuestion && (
+            <motion.div
+              key={currentQuestion.id}
+              initial={{ opacity: 0, x: 50 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: -50 }}
+              transition={{ duration: 0.3 }}
+              className="bg-bg-secondary border border-border rounded-2xl p-8"
+            >
+              <h2 className="text-xl font-semibold mb-6 leading-relaxed">
+                {currentQuestion.text}
+              </h2>
+
+              <div className="space-y-3">
+                {currentQuestion.options.map((opt) => {
+                  const isSelected = answers[currentQuestion.id] === opt.letter;
+                  return (
+                    <button
+                      key={opt.letter}
+                      onClick={() => handleSelect(currentQuestion.id, opt.letter)}
+                      className={`w-full text-left px-5 py-4 rounded-xl border transition-all duration-200 cursor-pointer ${
+                        isSelected
+                          ? "border-accent-blue bg-accent-blue/10 text-text-primary"
+                          : "border-border bg-bg-tertiary/50 text-text-secondary hover:border-accent-blue/50 hover:bg-bg-tertiary"
+                      }`}
+                    >
+                      <span
+                        className={`inline-flex items-center justify-center w-7 h-7 rounded-full text-xs font-medium mr-3 ${
+                          isSelected
+                            ? "bg-accent-blue text-white"
+                            : "bg-bg-tertiary text-text-secondary"
+                        }`}
+                      >
+                        {opt.letter.toUpperCase()}
+                      </span>
+                      {opt.text}
+                    </button>
+                  );
+                })}
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        <div className="flex justify-between mt-6">
+          <Button
+            variant="ghost"
+            onClick={() => setCurrentQ(Math.max(0, currentQ - 1))}
+            disabled={currentQ === 0}
+          >
+            Previous
+          </Button>
+
+          {currentQ < totalQuestions - 1 ? (
+            <Button
+              onClick={() => setCurrentQ(currentQ + 1)}
+              disabled={!answers[currentQuestion?.id]}
+            >
+              Next
+            </Button>
+          ) : (
+            <Button onClick={handleSubmit} disabled={!allAnswered || isAnalyzing}>
+              {isAnalyzing ? "Analyzing..." : "See Results"}
+            </Button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+```
+
+
+================================================================================
+File: apps\web\src\app\portfolio\page.tsx
+================================================================================
+
+```typescript
+"use client";
+
+import { useProfileStore } from "../../hooks/useProfile";
+import { AppLayout } from "../../components/layout/AppLayout";
+import { Card } from "../../components/ui/Card";
+import { StatCard } from "../../components/ui/StatCard";
+import { Badge } from "../../components/ui/Badge";
+import { AllocationPie } from "../../components/charts/AllocationPie";
+import { PROFILE_COLORS, PROFILE_LABELS, RANKING_COLORS } from "../../lib/constants";
+import { formatPercent, formatNumber } from "../../lib/formatters";
+import { useRouter } from "next/navigation";
+
+export default function PortfolioPage() {
+  const router = useRouter();
+  const { analysisResult } = useProfileStore();
+
+  if (!analysisResult) {
+    return (
+      <AppLayout>
+        <div className="flex flex-col items-center justify-center h-[60vh] gap-4">
+          <p className="text-text-secondary text-lg">No analysis results yet.</p>
+          <button
+            onClick={() => router.push("/")}
+            className="text-accent-blue hover:underline cursor-pointer"
+          >
+            Take the questionnaire first
+          </button>
+        </div>
+      </AppLayout>
+    );
+  }
+
+  const { profile, winner, ranking, portfolios, allocation, top_criteria, consistency_ratio } =
+    analysisResult;
+
+  return (
+    <AppLayout>
+      <div className="flex items-center justify-between mb-8">
+        <div>
+          <h1 className="text-2xl font-bold">AHP Portfolio Analysis</h1>
+          <p className="text-text-secondary text-sm mt-1">
+            15 criteria, 5 categories, Saaty methodology
+          </p>
+        </div>
+        <Badge color="blue">Consistency Ratio: {consistency_ratio}</Badge>
+      </div>
+
+      {/* Winner highlight */}
+      <Card className="mb-8 border-accent-gold/30 bg-accent-gold/5">
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-sm text-accent-gold uppercase tracking-wider font-medium">
+              Recommended Portfolio
+            </p>
+            <h2 className="text-3xl font-bold text-text-primary mt-1">
+              {winner.name}
+            </h2>
+            <p className="text-text-secondary text-sm mt-1">
+              AHP Score: {winner.score}% — Rank #{winner.rank}
+            </p>
+          </div>
+          <div className="text-right">
+            {allocation.map((a) => (
+              <span
+                key={a.ticker}
+                className="inline-block bg-bg-tertiary text-text-primary text-xs px-2 py-1 rounded ml-1 mb-1"
+              >
+                {a.ticker}: {a.weight}
+              </span>
+            ))}
+          </div>
+        </div>
+      </Card>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+        {/* Ranking bars */}
+        <Card>
+          <h3 className="text-lg font-semibold mb-4">AHP Global Ranking</h3>
+          <div className="space-y-4">
+            {ranking.map((entry, i) => {
+              const port = portfolios.find((p) => p.name === entry.name);
+              return (
+                <div key={entry.name}>
+                  <div className="flex items-center justify-between mb-1">
+                    <div className="flex items-center gap-2">
+                      <span
+                        className="text-lg font-bold"
+                        style={{ color: RANKING_COLORS[i] || "#6b7280" }}
+                      >
+                        #{entry.rank}
+                      </span>
+                      <span className="font-medium">{entry.name}</span>
+                      {entry.name === winner.name && (
+                        <Badge color="gold">Winner</Badge>
+                      )}
+                    </div>
+                    <span className="text-sm text-text-secondary font-mono">
+                      {entry.score}%
+                    </span>
+                  </div>
+                  <div className="h-4 bg-bg-tertiary rounded-full overflow-hidden">
+                    <div
+                      className="h-full rounded-full transition-all duration-700"
+                      style={{
+                        width: `${entry.score * 2}%`,
+                        backgroundColor: RANKING_COLORS[i] || "#6b7280",
+                      }}
+                    />
+                  </div>
+                  {port && (
+                    <div className="flex gap-4 mt-1 text-xs text-text-secondary">
+                      <span>Return: {formatPercent(port.rentabilidad)}</span>
+                      <span>Sharpe: {port.sharpe.toFixed(2)}</span>
+                      <span>Vol: {port.volatilidad.toFixed(1)}%</span>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </Card>
+
+        {/* Allocation chart */}
+        <Card>
+          <h3 className="text-lg font-semibold mb-4">Winner Composition</h3>
+          <AllocationPie allocation={allocation} />
+        </Card>
+      </div>
+
+      {/* Full portfolio comparison table */}
+      <Card>
+        <h3 className="text-lg font-semibold mb-4">Portfolio Comparison</h3>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-text-secondary text-xs uppercase border-b border-border">
+                <th className="text-left px-3 py-3">Portfolio</th>
+                <th className="text-right px-3 py-3">AHP Score</th>
+                <th className="text-right px-3 py-3">Return</th>
+                <th className="text-right px-3 py-3">Volatility</th>
+                <th className="text-right px-3 py-3">Sharpe</th>
+                <th className="text-right px-3 py-3">Max DD</th>
+                <th className="text-right px-3 py-3">Beta</th>
+                <th className="text-right px-3 py-3">Alpha</th>
+                <th className="text-left px-3 py-3">Composition</th>
+              </tr>
+            </thead>
+            <tbody>
+              {portfolios.map((p) => {
+                const rank = ranking.find((r) => r.name === p.name);
+                const isWinner = p.name === winner.name;
+                return (
+                  <tr
+                    key={p.name}
+                    className={`border-t border-border/30 ${
+                      isWinner ? "bg-accent-gold/5" : ""
+                    }`}
+                  >
+                    <td className="px-3 py-3 font-medium">
+                      {p.name}
+                      {isWinner && (
+                        <span className="ml-2 text-accent-gold text-xs">★</span>
+                      )}
+                    </td>
+                    <td className="px-3 py-3 text-right font-mono">
+                      {rank?.score ?? "—"}%
+                    </td>
+                    <td
+                      className={`px-3 py-3 text-right ${
+                        p.rentabilidad >= 0 ? "text-accent-green" : "text-accent-red"
+                      }`}
+                    >
+                      {formatPercent(p.rentabilidad)}
+                    </td>
+                    <td className="px-3 py-3 text-right text-text-secondary">
+                      {p.volatilidad.toFixed(1)}%
+                    </td>
+                    <td className="px-3 py-3 text-right">{p.sharpe.toFixed(2)}</td>
+                    <td className="px-3 py-3 text-right text-accent-red">
+                      {formatPercent(p.max_drawdown)}
+                    </td>
+                    <td className="px-3 py-3 text-right text-text-secondary">
+                      {p.beta.toFixed(2)}
+                    </td>
+                    <td
+                      className={`px-3 py-3 text-right ${
+                        p.alpha >= 0 ? "text-accent-green" : "text-accent-red"
+                      }`}
+                    >
+                      {formatPercent(p.alpha)}
+                    </td>
+                    <td className="px-3 py-3 text-text-secondary text-xs">
+                      {p.tickers}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+    </AppLayout>
+  );
+}
+```
+
+
+================================================================================
+File: apps\web\src\app\providers.tsx
+================================================================================
+
+```typescript
+"use client";
+
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { useState } from "react";
+
+export function Providers({ children }: { children: React.ReactNode }) {
+  const [queryClient] = useState(
+    () =>
+      new QueryClient({
+        defaultOptions: {
+          queries: {
+            staleTime: 30 * 1000,
+            refetchOnWindowFocus: false,
+          },
+        },
+      })
+  );
+
+  return (
+    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+  );
+}
+```
+
+
+================================================================================
+File: apps\web\src\app\report\page.tsx
+================================================================================
+
+```typescript
+"use client";
+
+import { useState } from "react";
+import { useRouter } from "next/navigation";
+import { AppLayout } from "../../components/layout/AppLayout";
+import { Card } from "../../components/ui/Card";
+import { useProfileStore } from "../../hooks/useProfile";
+import { downloadWordReport } from "../../lib/api";
+import { PROFILE_LABELS, PROFILE_COLORS } from "../../lib/constants";
+
+export default function ReportPage() {
+  const router = useRouter();
+  const { analysisResult, profileResult, answers } = useProfileStore();
+  const [downloading, setDownloading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleDownload = async () => {
+    setDownloading(true);
+    setError(null);
+    try {
+      await downloadWordReport(answers);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Error generating report");
+    } finally {
+      setDownloading(false);
+    }
+  };
+
+  if (!analysisResult || !profileResult) {
+    return (
+      <AppLayout>
+        <div className="flex flex-col items-center justify-center h-[60vh] gap-4">
+          <p className="text-text-secondary text-lg">No hay resultados de análisis.</p>
+          <button
+            onClick={() => router.push("/")}
+            className="text-accent-blue hover:underline cursor-pointer"
+          >
+            Completa el cuestionario primero
+          </button>
+        </div>
+      </AppLayout>
+    );
+  }
+
+  const profileColor = PROFILE_COLORS[profileResult.profile] || "#3b82f6";
+  const profileLabel = PROFILE_LABELS[profileResult.profile] || profileResult.profile;
+  const winner = analysisResult.ranking?.[0];
+
+  const sections = [
+    { title: "Perfil del Inversor", desc: "Clasificación del perfil, puntuaciones por dimensión e implicaciones estratégicas." },
+    { title: "Universo y Datos", desc: "Índices bursátiles considerados, los 15 indicadores financieros utilizados y su justificación." },
+    { title: "Filtrado de Acciones", desc: "Criterios de filtrado aplicados según el perfil y las acciones seleccionadas del universo." },
+    { title: "Metodología AHP", desc: "Proceso analítico jerárquico de Saaty, matriz de comparación pareada y pesos de criterios con tabla de prioridades." },
+    { title: "Construcción Markowitz", desc: "Optimización media-varianza, maximización del ratio de Sharpe y justificación de los pesos individuales." },
+    { title: "Ranking AHP Final", desc: "Puntuación de cada acción candidata, tabla de ranking y justificación del activo ganador." },
+    { title: "Cartera Recomendada", desc: "Métricas de rendimiento, tabla de asignación con porcentajes y rol de cada posición." },
+    { title: "Referencias Académicas", desc: "Bibliografía completa de los métodos y fuentes de datos utilizados." },
+  ];
+
+  return (
+    <AppLayout>
+      <div className="max-w-3xl mx-auto space-y-6">
+        {/* Header */}
+        <div>
+          <h1 className="text-2xl font-bold text-text-primary">Informe de Cartera</h1>
+          <p className="text-text-secondary mt-1">
+            Informe metodológico completo en formato Word — explica paso a paso cómo se construyó tu cartera.
+          </p>
+        </div>
+
+        {/* Profile summary */}
+        <Card className="p-6">
+          <div className="flex items-center gap-4">
+            <div
+              className="w-14 h-14 rounded-xl flex items-center justify-center text-white font-bold text-lg shrink-0"
+              style={{ backgroundColor: profileColor }}
+            >
+              {profileLabel.slice(0, 2).toUpperCase()}
+            </div>
+            <div>
+              <p className="text-sm text-text-secondary">Perfil identificado</p>
+              <p className="text-xl font-bold" style={{ color: profileColor }}>{profileLabel}</p>
+              {winner && (
+                <p className="text-sm text-text-secondary mt-0.5">
+                  Activo ganador AHP: <span className="text-text-primary font-medium">{winner.ticker}</span>
+                  {winner.name && winner.name !== winner.ticker && (
+                    <span className="text-text-secondary"> — {winner.name}</span>
+                  )}
+                </p>
+              )}
+            </div>
+          </div>
+        </Card>
+
+        {/* Report contents */}
+        <Card className="p-6">
+          <h2 className="text-base font-semibold mb-4">Contenido del informe</h2>
+          <ol className="space-y-3">
+            {sections.map((s, i) => (
+              <li key={i} className="flex gap-3">
+                <span
+                  className="flex-shrink-0 w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold text-white"
+                  style={{ backgroundColor: profileColor }}
+                >
+                  {i + 1}
+                </span>
+                <div>
+                  <p className="text-sm font-medium text-text-primary">{s.title}</p>
+                  <p className="text-xs text-text-secondary mt-0.5">{s.desc}</p>
+                </div>
+              </li>
+            ))}
+          </ol>
+        </Card>
+
+        {/* Download */}
+        <Card className="p-6">
+          <div className="flex flex-col items-center gap-4 text-center">
+            <svg className="w-12 h-12 text-text-secondary" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+            </svg>
+            <div>
+              <p className="text-sm font-medium text-text-primary">Informe_AHP_{profileLabel}.docx</p>
+              <p className="text-xs text-text-secondary mt-1">Documento Word profesional con tablas, análisis completo y referencias.</p>
+            </div>
+
+            {error && (
+              <p className="text-sm text-accent-red bg-accent-red/10 px-4 py-2 rounded-lg w-full">{error}</p>
+            )}
+
+            <button
+              onClick={handleDownload}
+              disabled={downloading}
+              className="flex items-center gap-2 px-6 py-3 rounded-xl text-sm font-semibold text-white transition-all disabled:opacity-60 cursor-pointer disabled:cursor-not-allowed"
+              style={{ backgroundColor: profileColor }}
+            >
+              {downloading ? (
+                <>
+                  <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  Generando informe...
+                </>
+              ) : (
+                <>
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                  </svg>
+                  Descargar Informe Word
+                </>
+              )}
+            </button>
+          </div>
+        </Card>
+      </div>
+    </AppLayout>
+  );
+}
+```
+
+
+================================================================================
+File: apps\web\src\app\stocks\[ticker]\page.tsx
+================================================================================
+
+```typescript
+"use client";
+
+import { use } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { getStockDetail, getStockHistory } from "../../../lib/api";
+import { AppLayout } from "../../../components/layout/AppLayout";
+import { Card } from "../../../components/ui/Card";
+import { StatCard } from "../../../components/ui/StatCard";
+import { Badge } from "../../../components/ui/Badge";
+import { EquityCurve } from "../../../components/charts/EquityCurve";
+import { formatPercent, formatPrice } from "../../../lib/formatters";
+import { INDEX_LABELS } from "../../../lib/constants";
+
+export default function StockDetailPage({
+  params,
+}: {
+  params: Promise<{ ticker: string }>;
+}) {
+  const { ticker } = use(params);
+
+  const { data: detail, isLoading: loadingDetail } = useQuery({
+    queryKey: ["stock-detail", ticker],
+    queryFn: () => getStockDetail(ticker),
+  });
+
+  const { data: history, isLoading: loadingHistory } = useQuery({
+    queryKey: ["stock-history", ticker],
+    queryFn: () => getStockHistory(ticker, "6mo"),
+  });
+
+  const isLoading = loadingDetail || loadingHistory;
+
+  if (isLoading) {
+    return (
+      <AppLayout>
+        <div className="flex items-center justify-center h-[60vh]">
+          <div className="w-8 h-8 border-3 border-accent-blue border-t-transparent rounded-full animate-spin" />
+        </div>
+      </AppLayout>
+    );
+  }
+
+  const priceData =
+    history?.data.map((d) => ({
+      date: d.date,
+      value: d.close,
+    })) ?? [];
+
+  const change = detail?.change_1d ?? 0;
+
+  return (
+    <AppLayout>
+      {/* Header */}
+      <div className="flex items-center justify-between mb-8">
+        <div>
+          <div className="flex items-center gap-3">
+            <h1 className="text-3xl font-bold">{ticker.toUpperCase()}</h1>
+            {detail?.index && (
+              <Badge color="blue">
+                {INDEX_LABELS[detail.index] || detail.index}
+              </Badge>
+            )}
+            {detail?.sector && <Badge color="gray">{detail.sector}</Badge>}
+          </div>
+          <p className="text-text-secondary text-sm mt-1">{detail?.name || ticker}</p>
+        </div>
+        <div className="text-right">
+          <p className="text-3xl font-bold font-mono">
+            ${formatPrice(detail?.price ?? 0)}
+          </p>
+          <p
+            className={`text-lg font-medium ${
+              change >= 0 ? "text-accent-green" : "text-accent-red"
+            }`}
+          >
+            {formatPercent(change)} today
+          </p>
+        </div>
+      </div>
+
+      {/* Price Chart */}
+      <Card className="mb-8">
+        <h3 className="text-lg font-semibold mb-4">Price History (6 months)</h3>
+        {priceData.length > 0 ? (
+          <EquityCurve data={priceData} height={400} />
+        ) : (
+          <p className="text-text-secondary text-sm">No historical data available</p>
+        )}
+      </Card>
+
+      {/* OHLCV Table */}
+      {history && history.data.length > 0 && (
+        <Card>
+          <h3 className="text-lg font-semibold mb-4">Recent Price Data</h3>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-text-secondary text-xs uppercase border-b border-border">
+                  <th className="text-left px-3 py-2">Date</th>
+                  <th className="text-right px-3 py-2">Open</th>
+                  <th className="text-right px-3 py-2">High</th>
+                  <th className="text-right px-3 py-2">Low</th>
+                  <th className="text-right px-3 py-2">Close</th>
+                  <th className="text-right px-3 py-2">Volume</th>
+                </tr>
+              </thead>
+              <tbody>
+                {history.data
+                  .slice(-10)
+                  .reverse()
+                  .map((d) => (
+                    <tr
+                      key={d.date}
+                      className="border-t border-border/30"
+                    >
+                      <td className="px-3 py-2 text-text-secondary">{d.date}</td>
+                      <td className="px-3 py-2 text-right font-mono">{formatPrice(d.open)}</td>
+                      <td className="px-3 py-2 text-right font-mono text-accent-green">
+                        {formatPrice(d.high)}
+                      </td>
+                      <td className="px-3 py-2 text-right font-mono text-accent-red">
+                        {formatPrice(d.low)}
+                      </td>
+                      <td className="px-3 py-2 text-right font-mono font-medium">
+                        {formatPrice(d.close)}
+                      </td>
+                      <td className="px-3 py-2 text-right text-text-secondary">
+                        {(d.volume / 1e6).toFixed(1)}M
+                      </td>
+                    </tr>
+                  ))}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      )}
+    </AppLayout>
+  );
+}
+```
+
+
+================================================================================
+File: apps\web\src\components\charts\AllocationPie.tsx
+================================================================================
+
+```typescript
+"use client";
+
+import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from "recharts";
+import type { AllocationEntry } from "../../types";
+
+const COLORS = ["#3b82f6", "#22c55e", "#f59e0b", "#ef4444", "#8b5cf6", "#06b6d4", "#ec4899"];
+
+interface AllocationPieProps {
+  allocation: AllocationEntry[];
+}
+
+export function AllocationPie({ allocation }: AllocationPieProps) {
+  const data = allocation.map((a) => ({
+    name: a.ticker,
+    value: parseFloat(a.weight.replace("%", "")),
+  }));
+
+  return (
+    <div className="w-full h-64">
+      <ResponsiveContainer width="100%" height="100%">
+        <PieChart>
+          <Pie
+            data={data}
+            cx="50%"
+            cy="50%"
+            innerRadius={60}
+            outerRadius={90}
+            paddingAngle={3}
+            dataKey="value"
+          >
+            {data.map((_, index) => (
+              <Cell
+                key={`cell-${index}`}
+                fill={COLORS[index % COLORS.length]}
+                stroke="transparent"
+              />
+            ))}
+          </Pie>
+          <Tooltip
+            contentStyle={{
+              backgroundColor: "#161b22",
+              border: "1px solid #30363d",
+              borderRadius: "8px",
+              color: "#f0f6fc",
+            }}
+            formatter={(value) => [`${value}%`, "Weight"]}
+          />
+        </PieChart>
+      </ResponsiveContainer>
+      {/* Legend */}
+      <div className="flex flex-wrap justify-center gap-4 mt-2">
+        {data.map((entry, index) => (
+          <div key={entry.name} className="flex items-center gap-1.5">
+            <div
+              className="w-3 h-3 rounded-full"
+              style={{ backgroundColor: COLORS[index % COLORS.length] }}
+            />
+            <span className="text-xs text-text-secondary">
+              {entry.name} ({entry.value}%)
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+```
+
+
+================================================================================
+File: apps\web\src\components\charts\CriteriaRadar.tsx
+================================================================================
+
+```typescript
+"use client";
+
+import {
+  RadarChart,
+  PolarGrid,
+  PolarAngleAxis,
+  PolarRadiusAxis,
+  Radar,
+  ResponsiveContainer,
+  Tooltip,
+} from "recharts";
+
+interface RadarDataPoint {
+  criterion: string;
+  [portfolio: string]: string | number;
+}
+
+interface CriteriaRadarProps {
+  data: RadarDataPoint[];
+  portfolioNames: string[];
+}
+
+const COLORS = ["#22c55e", "#3b82f6", "#f59e0b", "#ef4444", "#8b5cf6"];
+
+export function CriteriaRadar({ data, portfolioNames }: CriteriaRadarProps) {
+  return (
+    <div className="w-full h-80">
+      <ResponsiveContainer>
+        <RadarChart data={data}>
+          <PolarGrid stroke="#30363d" />
+          <PolarAngleAxis
+            dataKey="criterion"
+            tick={{ fill: "#8b949e", fontSize: 10 }}
+          />
+          <PolarRadiusAxis tick={false} axisLine={false} />
+          {portfolioNames.map((name, i) => (
+            <Radar
+              key={name}
+              name={name}
+              dataKey={name}
+              stroke={COLORS[i % COLORS.length]}
+              fill={COLORS[i % COLORS.length]}
+              fillOpacity={0.15}
+              strokeWidth={2}
+            />
+          ))}
+          <Tooltip
+            contentStyle={{
+              backgroundColor: "#161b22",
+              border: "1px solid #30363d",
+              borderRadius: "8px",
+              color: "#f0f6fc",
+              fontSize: "12px",
+            }}
+          />
+        </RadarChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+```
+
+
+================================================================================
+File: apps\web\src\components\charts\EquityCurve.tsx
+================================================================================
+
+```typescript
+"use client";
+
+import {
+  AreaChart,
+  Area,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+} from "recharts";
+
+interface DataPoint {
+  date: string;
+  value: number;
+}
+
+interface EquityCurveProps {
+  data: DataPoint[];
+  benchmarkData?: DataPoint[];
+  height?: number;
+}
+
+export function EquityCurve({ data, benchmarkData, height = 300 }: EquityCurveProps) {
+  // Merge portfolio and benchmark data
+  const merged = data.map((d, i) => ({
+    date: d.date,
+    portfolio: d.value,
+    benchmark: benchmarkData?.[i]?.value,
+  }));
+
+  return (
+    <div style={{ width: "100%", height }}>
+      <ResponsiveContainer>
+        <AreaChart data={merged} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+          <defs>
+            <linearGradient id="gradPortfolio" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="5%" stopColor="#22c55e" stopOpacity={0.3} />
+              <stop offset="95%" stopColor="#22c55e" stopOpacity={0} />
+            </linearGradient>
+          </defs>
+          <CartesianGrid strokeDasharray="3 3" stroke="#21262d" />
+          <XAxis
+            dataKey="date"
+            stroke="#8b949e"
+            fontSize={11}
+            tickLine={false}
+            axisLine={false}
+          />
+          <YAxis
+            stroke="#8b949e"
+            fontSize={11}
+            tickLine={false}
+            axisLine={false}
+            tickFormatter={(v) => `${(v * 100).toFixed(0)}%`}
+          />
+          <Tooltip
+            contentStyle={{
+              backgroundColor: "#161b22",
+              border: "1px solid #30363d",
+              borderRadius: "8px",
+              color: "#f0f6fc",
+              fontSize: "12px",
+            }}
+            formatter={(value, name) => [
+              `${(Number(value) * 100).toFixed(2)}%`,
+              name === "portfolio" ? "Portfolio" : "Benchmark",
+            ]}
+          />
+          {benchmarkData && (
+            <Area
+              type="monotone"
+              dataKey="benchmark"
+              stroke="#8b949e"
+              fill="none"
+              strokeWidth={1.5}
+              strokeDasharray="4 4"
+              dot={false}
+            />
+          )}
+          <Area
+            type="monotone"
+            dataKey="portfolio"
+            stroke="#22c55e"
+            fill="url(#gradPortfolio)"
+            strokeWidth={2}
+            dot={false}
+          />
+        </AreaChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+```
+
+
+================================================================================
+File: apps\web\src\components\charts\SparklineChart.tsx
+================================================================================
+
+```typescript
+"use client";
+
+interface SparklineChartProps {
+  data: number[];
+  color?: string;
+  width?: number;
+  height?: number;
+}
+
+export function SparklineChart({
+  data,
+  color,
+  width = 100,
+  height = 32,
+}: SparklineChartProps) {
+  if (!data.length) return null;
+
+  const isPositive = data[data.length - 1] >= data[0];
+  const strokeColor = color || (isPositive ? "#22c55e" : "#ef4444");
+
+  const min = Math.min(...data);
+  const max = Math.max(...data);
+  const range = max - min || 1;
+
+  const points = data
+    .map((value, i) => {
+      const x = (i / (data.length - 1)) * width;
+      const y = height - ((value - min) / range) * height;
+      return `${x},${y}`;
+    })
+    .join(" ");
+
+  return (
+    <svg width={width} height={height} className="overflow-visible">
+      <polyline
+        points={points}
+        fill="none"
+        stroke={strokeColor}
+        strokeWidth={1.5}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+```
+
+
+================================================================================
+File: apps\web\src\components\layout\AppLayout.tsx
+================================================================================
+
+```typescript
+"use client";
+
+import { Sidebar } from "./Sidebar";
+
+export function AppLayout({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="flex min-h-screen">
+      <Sidebar />
+      <main className="flex-1 ml-64 p-8">{children}</main>
+    </div>
+  );
+}
+```
+
+
+================================================================================
+File: apps\web\src\components\layout\Sidebar.tsx
+================================================================================
+
+```typescript
+"use client";
+
+import Link from "next/link";
+import { usePathname } from "next/navigation";
+
+const navItems = [
+  { href: "/dashboard", label: "Dashboard", icon: "M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" },
+  { href: "/market", label: "Market", icon: "M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" },
+  { href: "/heatmap", label: "Heatmap", icon: "M4 5a1 1 0 011-1h14a1 1 0 011 1v2a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM4 13a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H5a1 1 0 01-1-1v-6zM16 13a1 1 0 011-1h2a1 1 0 011 1v6a1 1 0 01-1 1h-2a1 1 0 01-1-1v-6z" },
+  { href: "/portfolio", label: "Portfolio", icon: "M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" },
+  { href: "/backtest", label: "Backtest", icon: "M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" },
+  { href: "/report", label: "Informe", icon: "M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" },
+];
+
+export function Sidebar() {
+  const pathname = usePathname();
+
+  return (
+    <aside className="fixed left-0 top-0 h-full w-64 bg-bg-secondary border-r border-border flex flex-col z-40">
+      {/* Logo */}
+      <Link href="/" className="flex items-center gap-3 px-6 py-5 border-b border-border">
+        <div className="w-8 h-8 rounded-lg bg-accent-blue flex items-center justify-center">
+          <span className="text-white font-bold text-sm">AHP</span>
+        </div>
+        <div>
+          <h1 className="text-sm font-bold text-text-primary">AHP Portfolio</h1>
+          <p className="text-[10px] text-text-secondary">Investor Platform</p>
+        </div>
+      </Link>
+
+      {/* Navigation */}
+      <nav className="flex-1 px-3 py-4 space-y-1">
+        {navItems.map((item) => {
+          const isActive = pathname === item.href;
+          return (
+            <Link
+              key={item.href}
+              href={item.href}
+              className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors ${
+                isActive
+                  ? "bg-accent-blue/15 text-accent-blue"
+                  : "text-text-secondary hover:text-text-primary hover:bg-bg-tertiary"
+              }`}
+            >
+              <svg className="w-5 h-5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d={item.icon} />
+              </svg>
+              {item.label}
+            </Link>
+          );
+        })}
+      </nav>
+
+      {/* Footer */}
+      <div className="px-4 py-4 border-t border-border">
+        <Link
+          href="/"
+          className="flex items-center gap-2 text-xs text-text-secondary hover:text-accent-blue transition-colors"
+        >
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+          </svg>
+          Restart Questionnaire
+        </Link>
+      </div>
+    </aside>
+  );
+}
+```
+
+
+================================================================================
+File: apps\web\src\components\market\FearGreedGauge.tsx
+================================================================================
+
+```typescript
+"use client";
+
+interface FearGreedGaugeProps {
+  value: number;
+  label: string;
+}
+
+export function FearGreedGauge({ value, label }: FearGreedGaugeProps) {
+  // Semicircle gauge: value 0-100 maps to -90deg to +90deg
+  const rotation = -90 + (value / 100) * 180;
+
+  const getColor = (v: number) => {
+    if (v <= 20) return "#ef4444";
+    if (v <= 40) return "#f97316";
+    if (v <= 60) return "#f59e0b";
+    if (v <= 80) return "#84cc16";
+    return "#22c55e";
+  };
+
+  return (
+    <div className="flex flex-col items-center gap-2">
+      <div className="relative w-48 h-24 overflow-hidden">
+        {/* Background arc */}
+        <div className="absolute inset-0">
+          <svg viewBox="0 0 200 100" className="w-full h-full">
+            <defs>
+              <linearGradient id="gaugeGrad" x1="0" y1="0" x2="1" y2="0">
+                <stop offset="0%" stopColor="#ef4444" />
+                <stop offset="25%" stopColor="#f97316" />
+                <stop offset="50%" stopColor="#f59e0b" />
+                <stop offset="75%" stopColor="#84cc16" />
+                <stop offset="100%" stopColor="#22c55e" />
+              </linearGradient>
+            </defs>
+            <path
+              d="M 20 95 A 80 80 0 0 1 180 95"
+              fill="none"
+              stroke="url(#gaugeGrad)"
+              strokeWidth="12"
+              strokeLinecap="round"
+            />
+          </svg>
+        </div>
+
+        {/* Needle */}
+        <div
+          className="absolute bottom-0 left-1/2 w-0.5 h-16 bg-text-primary origin-bottom transition-transform duration-1000"
+          style={{ transform: `translateX(-50%) rotate(${rotation}deg)` }}
+        >
+          <div
+            className="w-3 h-3 rounded-full -ml-[5px] -mt-1"
+            style={{ backgroundColor: getColor(value) }}
+          />
+        </div>
+      </div>
+
+      <div className="text-center">
+        <div className="text-4xl font-bold" style={{ color: getColor(value) }}>
+          {value}
+        </div>
+        <div className="text-sm text-text-secondary">{label}</div>
+      </div>
+    </div>
+  );
+}
+```
+
+
+================================================================================
+File: apps\web\src\components\ui\Badge.tsx
+================================================================================
+
+```typescript
+interface BadgeProps {
+  children: React.ReactNode;
+  color?: "green" | "red" | "blue" | "gold" | "gray";
+  className?: string;
+}
+
+const colorMap = {
+  green: "bg-accent-green/20 text-accent-green",
+  red: "bg-accent-red/20 text-accent-red",
+  blue: "bg-accent-blue/20 text-accent-blue",
+  gold: "bg-accent-gold/20 text-accent-gold",
+  gray: "bg-bg-tertiary text-text-secondary",
+};
+
+export function Badge({ children, color = "gray", className = "" }: BadgeProps) {
+  return (
+    <span
+      className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${colorMap[color]} ${className}`}
+    >
+      {children}
+    </span>
+  );
+}
+```
+
+
+================================================================================
+File: apps\web\src\components\ui\Button.tsx
+================================================================================
+
+```typescript
+interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
+  variant?: "primary" | "secondary" | "ghost";
+  size?: "sm" | "md" | "lg";
+}
+
+export function Button({
+  variant = "primary",
+  size = "md",
+  className = "",
+  children,
+  ...props
+}: ButtonProps) {
+  const variants = {
+    primary:
+      "bg-accent-blue hover:bg-accent-blue/80 text-white",
+    secondary:
+      "bg-bg-tertiary hover:bg-border text-text-primary border border-border",
+    ghost:
+      "bg-transparent hover:bg-bg-tertiary text-text-secondary hover:text-text-primary",
+  };
+
+  const sizes = {
+    sm: "px-3 py-1.5 text-sm",
+    md: "px-5 py-2.5 text-sm",
+    lg: "px-7 py-3 text-base",
+  };
+
+  return (
+    <button
+      className={`rounded-lg font-medium transition-all duration-200 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${variants[variant]} ${sizes[size]} ${className}`}
+      {...props}
+    >
+      {children}
+    </button>
+  );
+}
+```
+
+
+================================================================================
+File: apps\web\src\components\ui\Card.tsx
+================================================================================
+
+```typescript
+interface CardProps {
+  children: React.ReactNode;
+  className?: string;
+  glass?: boolean;
+}
+
+export function Card({ children, className = "", glass = false }: CardProps) {
+  const base = glass
+    ? "glass rounded-xl p-6"
+    : "bg-bg-secondary border border-border rounded-xl p-6";
+  return <div className={`${base} ${className}`}>{children}</div>;
+}
+```
+
+
+================================================================================
+File: apps\web\src\components\ui\Progress.tsx
+================================================================================
+
+```typescript
+interface ProgressProps {
+  value: number;
+  max?: number;
+  color?: string;
+  className?: string;
+}
+
+export function Progress({
+  value,
+  max = 100,
+  color = "bg-accent-blue",
+  className = "",
+}: ProgressProps) {
+  const pct = Math.min((value / max) * 100, 100);
+
+  return (
+    <div className={`w-full h-2 bg-bg-tertiary rounded-full overflow-hidden ${className}`}>
+      <div
+        className={`h-full rounded-full transition-all duration-500 ${color}`}
+        style={{ width: `${pct}%` }}
+      />
+    </div>
+  );
+}
+```
+
+
+================================================================================
+File: apps\web\src\components\ui\Skeleton.tsx
+================================================================================
+
+```typescript
+interface SkeletonProps {
+  className?: string;
+}
+
+export function Skeleton({ className = "" }: SkeletonProps) {
+  return (
+    <div
+      className={`animate-pulse bg-bg-tertiary rounded ${className}`}
+    />
+  );
+}
+
+export function StatCardSkeleton() {
+  return (
+    <div className="bg-bg-secondary border border-border rounded-xl p-6">
+      <Skeleton className="h-4 w-24 mb-2" />
+      <Skeleton className="h-9 w-32 mb-1" />
+      <Skeleton className="h-3 w-20" />
+    </div>
+  );
+}
+```
+
+
+================================================================================
+File: apps\web\src\components\ui\StatCard.tsx
+================================================================================
+
+```typescript
+import { Card } from "./Card";
+
+interface StatCardProps {
+  label: string;
+  value: string;
+  subtitle?: string;
+  color?: "green" | "red" | "blue" | "gold" | "default";
+  className?: string;
+}
+
+const colorMap = {
+  green: "text-accent-green",
+  red: "text-accent-red",
+  blue: "text-accent-blue",
+  gold: "text-accent-gold",
+  default: "text-text-primary",
+};
+
+export function StatCard({
+  label,
+  value,
+  subtitle,
+  color = "default",
+  className = "",
+}: StatCardProps) {
+  return (
+    <Card className={`flex flex-col gap-1 ${className}`}>
+      <span className="text-sm font-medium text-text-secondary uppercase tracking-wider">
+        {label}
+      </span>
+      <span className={`text-3xl font-bold ${colorMap[color]}`}>{value}</span>
+      {subtitle && (
+        <span className="text-xs text-text-secondary">{subtitle}</span>
+      )}
+    </Card>
+  );
+}
+```
+
+
+================================================================================
+File: apps\web\src\hooks\useProfile.ts
+================================================================================
+
+```typescript
+"use client";
+
+import { create } from "zustand";
+import { persist } from "zustand/middleware";
+import type { AnalysisResponse, ProfileResult } from "../types";
+
+interface ProfileState {
+  // Questionnaire answers
+  answers: Record<string, string>;
+  setAnswer: (questionId: string, letter: string) => void;
+  clearAnswers: () => void;
+
+  // Profile result
+  profileResult: ProfileResult | null;
+  setProfileResult: (result: ProfileResult) => void;
+
+  // Analysis results
+  analysisResult: AnalysisResponse | null;
+  setAnalysisResult: (result: AnalysisResponse) => void;
+
+  // Loading state
+  isAnalyzing: boolean;
+  setIsAnalyzing: (loading: boolean) => void;
+}
+
+export const useProfileStore = create<ProfileState>()(
+  persist(
+    (set) => ({
+      answers: {},
+      setAnswer: (questionId, letter) =>
+        set((state) => ({
+          answers: { ...state.answers, [questionId]: letter },
+        })),
+      clearAnswers: () => set({ answers: {}, profileResult: null, analysisResult: null }),
+
+      profileResult: null,
+      setProfileResult: (result) => set({ profileResult: result }),
+
+      analysisResult: null,
+      setAnalysisResult: (result) => set({ analysisResult: result }),
+
+      isAnalyzing: false,
+      setIsAnalyzing: (loading) => set({ isAnalyzing: loading }),
+    }),
+    {
+      name: "ahp-profile-storage",
+    }
+  )
+);
+```
+
+
+================================================================================
+File: apps\web\src\hooks\useWebSocket.ts
+================================================================================
+
+```typescript
+"use client";
+
+import { useEffect, useRef, useCallback, useState } from "react";
+
+// Compute WS URL from current page location (works through Next.js proxy)
+const WS_URL =
+  process.env.NEXT_PUBLIC_WS_URL ||
+  (typeof window !== "undefined"
+    ? `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}/ws/prices`
+    : "ws://localhost:8000/ws/prices");
+
+interface PriceUpdate {
+  type: string;
+  ticker: string;
+  price: number;
+  change_1d: number;
+  [key: string]: unknown;
+}
+
+export function useWebSocket(tickers?: string[]) {
+  const wsRef = useRef<WebSocket | null>(null);
+  const [connected, setConnected] = useState(false);
+  const [lastUpdate, setLastUpdate] = useState<PriceUpdate | null>(null);
+  const [prices, setPrices] = useState<Record<string, PriceUpdate>>({});
+
+  const connect = useCallback(() => {
+    if (wsRef.current?.readyState === WebSocket.OPEN) return;
+
+    const ws = new WebSocket(WS_URL);
+
+    ws.onopen = () => {
+      setConnected(true);
+      if (tickers?.length) {
+        ws.send(JSON.stringify({ subscribe: tickers }));
+      }
+    };
+
+    ws.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data) as PriceUpdate;
+        if (data.type === "price_update") {
+          setLastUpdate(data);
+          setPrices((prev) => ({ ...prev, [data.ticker]: data }));
+        }
+      } catch {
+        // ignore parse errors
+      }
+    };
+
+    ws.onclose = () => {
+      setConnected(false);
+      // Auto-reconnect after 3s
+      setTimeout(connect, 3000);
+    };
+
+    ws.onerror = () => {
+      ws.close();
+    };
+
+    wsRef.current = ws;
+  }, [tickers]);
+
+  useEffect(() => {
+    connect();
+    return () => {
+      wsRef.current?.close();
+    };
+  }, [connect]);
+
+  const subscribe = useCallback((newTickers: string[]) => {
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ subscribe: newTickers }));
+    }
+  }, []);
+
+  return { connected, lastUpdate, prices, subscribe };
+}
+```
+
+
+================================================================================
+File: apps\web\src\lib\api.ts
+================================================================================
+
+```typescript
+// Empty string = use relative URLs through Next.js proxy rewrites (no CORS issues)
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "";
+
+async function fetchAPI<T>(
+  endpoint: string,
+  options?: RequestInit
+): Promise<T> {
+  const res = await fetch(`${API_BASE}${endpoint}`, {
+    headers: { "Content-Type": "application/json" },
+    ...options,
+  });
+
+  if (!res.ok) {
+    const error = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(error.detail || `API error: ${res.status}`);
+  }
+
+  return res.json();
+}
+
+// ─── Questionnaire ───
+
+export async function getQuestions() {
+  return fetchAPI<import("../types").QuestionsResponse>(
+    "/api/questionnaire/questions"
+  );
+}
+
+export async function submitQuestionnaire(answers: Record<string, string>) {
+  return fetchAPI<import("../types").ProfileResult>(
+    "/api/questionnaire/submit",
+    { method: "POST", body: JSON.stringify({ answers }) }
+  );
+}
+
+// ─── Analysis ───
+
+export async function runAnalysis(profile: string, useLive = true) {
+  return fetchAPI<import("../types").AnalysisResponse>("/api/analyze", {
+    method: "POST",
+    body: JSON.stringify({ profile, use_live: useLive }),
+  });
+}
+
+export async function runFullAnalysis(answers: Record<string, string>) {
+  return fetchAPI<import("../types").AnalysisResponse>("/api/analyze/full", {
+    method: "POST",
+    body: JSON.stringify({ answers }),
+  });
+}
+
+// ─── Market ───
+
+export async function getMarketOverview() {
+  return fetchAPI<import("../types").MarketOverview>("/api/market/overview");
+}
+
+export async function getHeatmapData() {
+  return fetchAPI<{ entries: import("../types").HeatmapEntry[]; last_updated: string }>(
+    "/api/market/heatmap"
+  );
+}
+
+export async function getSentiment() {
+  return fetchAPI<import("../types").SentimentData>("/api/market/sentiment");
+}
+
+// ─── Stocks ───
+
+export async function getStockDetail(ticker: string) {
+  return fetchAPI<{
+    ticker: string;
+    name: string;
+    sector: string;
+    index: string;
+    price: number;
+    change_1d: number;
+    indicators: Record<string, number>;
+    history: import("../types").StockHistory[];
+  }>(`/api/stocks/${ticker}`);
+}
+
+export async function getStockHistory(ticker: string, period = "6mo") {
+  return fetchAPI<{ ticker: string; data: import("../types").StockHistory[] }>(
+    `/api/stocks/${ticker}/history?period=${period}`
+  );
+}
+
+// ─── Portfolio ───
+
+export async function getPortfolioResults() {
+  return fetchAPI<import("../types").AnalysisResponse>("/api/portfolio/results");
+}
+
+// ─── Backtest ───
+
+export async function runBacktest(
+  tickers: string[],
+  weights: Record<string, number>,
+  profile: string,
+  trainRatio = 0.7
+) {
+  return fetchAPI<import("../types").BacktestResponse>("/api/backtest", {
+    method: "POST",
+    body: JSON.stringify({
+      tickers,
+      weights,
+      profile,
+      train_ratio: trainRatio,
+    }),
+  });
+}
+
+// ─── Export ───
+
+export function getExcelDownloadUrl() {
+  return `${API_BASE}/api/export/excel`;
+}
+
+// ─── Report ───
+
+export async function downloadWordReport(answers?: Record<string, string>) {
+  const res = await fetch(`${API_BASE}/api/report/word`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ answers: answers ?? {} }),
+  });
+
+  if (!res.ok) {
+    const error = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(error.detail || `Error generating report: ${res.status}`);
+  }
+
+  const blob = await res.blob();
+  const disposition = res.headers.get("content-disposition") || "";
+  const match = disposition.match(/filename="?([^"]+)"?/);
+  const filename = match ? match[1] : "Informe_AHP.docx";
+
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+```
+
+
+================================================================================
+File: apps\web\src\lib\constants.ts
+================================================================================
+
+```typescript
+export const PROFILE_COLORS: Record<string, string> = {
+  conservador: "#3b82f6",
+  moderado: "#22c55e",
+  agresivo: "#f59e0b",
+  muy_agresivo: "#ef4444",
+  dividendos: "#8b5cf6",
+  tecnologico: "#06b6d4",
+  esg: "#10b981",
+};
+
+export const PROFILE_LABELS: Record<string, string> = {
+  conservador: "Conservador",
+  moderado: "Moderado",
+  agresivo: "Agresivo",
+  muy_agresivo: "Muy Agresivo",
+  dividendos: "Dividendos",
+  tecnologico: "Tecnológico",
+  esg: "ESG",
+};
+
+export const RANKING_COLORS = ["#f59e0b", "#9ca3af", "#cd7f32", "#3b82f6", "#6b7280"];
+
+export const INDEX_LABELS: Record<string, string> = {
+  sp500: "S&P 500",
+  eurostoxx: "Eurostoxx 600",
+  nikkei: "Nikkei 225",
+};
+```
+
+
+================================================================================
+File: apps\web\src\lib\formatters.ts
+================================================================================
+
+```typescript
+export function formatPercent(value: number, decimals = 2): string {
+  const sign = value >= 0 ? "+" : "";
+  return `${sign}${value.toFixed(decimals)}%`;
+}
+
+export function formatPrice(value: number): string {
+  if (value >= 1000) {
+    return value.toLocaleString("en-US", {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    });
+  }
+  return value.toFixed(2);
+}
+
+export function formatMarketCap(value: number | null): string {
+  if (!value) return "—";
+  if (value >= 1e12) return `$${(value / 1e12).toFixed(1)}T`;
+  if (value >= 1e9) return `$${(value / 1e9).toFixed(1)}B`;
+  if (value >= 1e6) return `$${(value / 1e6).toFixed(0)}M`;
+  return `$${value.toLocaleString()}`;
+}
+
+export function formatVolume(value: number | null): string {
+  if (!value) return "—";
+  if (value >= 1e9) return `${(value / 1e9).toFixed(1)}B`;
+  if (value >= 1e6) return `${(value / 1e6).toFixed(1)}M`;
+  if (value >= 1e3) return `${(value / 1e3).toFixed(0)}K`;
+  return value.toString();
+}
+
+export function formatNumber(value: number, decimals = 2): string {
+  return value.toFixed(decimals);
+}
+```
+
+
+================================================================================
+File: apps\web\src\types\index.ts
+================================================================================
+
+```typescript
+// ─── Questionnaire ───
+
+export interface QuestionOption {
+  letter: string;
+  text: string;
+  scores: Record<string, number>;
+}
+
+export interface Question {
+  id: string;
+  text: string;
+  options: QuestionOption[];
+}
+
+export interface QuestionsResponse {
+  questions: Question[];
+  total: number;
+}
+
+export interface ProfileResult {
+  profile: string;
+  description: string;
+  scores: Record<string, number>;
+}
+
+// ─── Analysis ───
+
+export interface CriterionInfo {
+  name: string;
+  weight: number;
+  direction: string;
+}
+
+export interface RankingEntry {
+  name: string;
+  score: number;
+  rank: number;
+}
+
+export interface PortfolioDetail {
+  name: string;
+  rentabilidad: number;
+  volatilidad: number;
+  sharpe: number;
+  max_drawdown: number;
+  beta: number;
+  alpha: number;
+  tickers: string;
+  pesos: string;
+}
+
+export interface StockInfo {
+  ticker: string;
+  rentabilidad: number;
+  sharpe: number;
+  volatilidad: number;
+  beta: number;
+}
+
+export interface AllocationEntry {
+  ticker: string;
+  weight: string;
+}
+
+export interface AnalysisResponse {
+  success: boolean;
+  profile: string;
+  profile_description: string;
+  scores: Record<string, number>;
+  top_criteria: CriterionInfo[];
+  ranking: RankingEntry[];
+  portfolios: PortfolioDetail[];
+  stocks: StockInfo[];
+  winner: RankingEntry;
+  allocation: AllocationEntry[];
+  n_stocks_analyzed: number;
+  n_stocks_selected: number;
+  consistency_ratio: number;
+  is_synthetic: boolean;
+}
+
+// ─── Market ───
+
+export interface MarketStock {
+  ticker: string;
+  name: string;
+  price: number;
+  change_1d: number;
+  change_7d: number;
+  market_cap: number | null;
+  volume: number | null;
+  sector: string;
+  index: string;
+  sparkline: number[];
+}
+
+export interface MarketOverview {
+  stocks: MarketStock[];
+  last_updated: string;
+  is_live: boolean;
+}
+
+export interface HeatmapEntry {
+  ticker: string;
+  name: string;
+  sector: string;
+  market_cap: number;
+  daily_change: number;
+  index: string;
+}
+
+export interface SentimentData {
+  fear_greed_index: number;
+  label: string;
+  components: Record<string, number>;
+}
+
+// ─── Stock Detail ───
+
+export interface StockHistory {
+  date: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+}
+
+// ─── Backtest ───
+
+export interface BacktestMetrics {
+  total_return: number;
+  annualized_return: number;
+  volatility: number;
+  sharpe: number;
+  sortino: number;
+  max_drawdown: number;
+  beta: number;
+  alpha: number;
+  beat_benchmark: boolean;
+}
+
+export interface BacktestResponse {
+  success: boolean;
+  portfolio_series: { date: string; value: number }[];
+  benchmark_series: { date: string; value: number }[];
+  drawdown_series: { date: string; value: number }[];
+  train_metrics: BacktestMetrics | null;
+  test_metrics: BacktestMetrics | null;
+  error?: string;
+}
+```
+
+
+================================================================================
+File: apps\web\package.json
+================================================================================
+
+```json
+{
+  "name": "ahp-web",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint"
+  },
+  "dependencies": {
+    "@tanstack/react-query": "^5.95.0",
+    "framer-motion": "^12.38.0",
+    "lightweight-charts": "^5.1.0",
+    "next": "16.2.1",
+    "react": "19.2.4",
+    "react-dom": "19.2.4",
+    "recharts": "^3.8.0",
+    "zustand": "^5.0.12"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "eslint": "^9",
+    "eslint-config-next": "16.2.1",
+    "tailwindcss": "^4",
+    "typescript": "^5"
+  }
+}
+```
+
+
+================================================================================
+File: apps\web\next.config.ts
+================================================================================
+
+```typescript
+import type { NextConfig } from "next";
+import path from "path";
+
+const nextConfig: NextConfig = {
+  turbopack: {
+    root: path.resolve(__dirname),
+  },
+  async rewrites() {
+    return [
+      {
+        source: "/api/:path*",
+        destination: "http://127.0.0.1:8000/api/:path*",
+      },
+      {
+        source: "/ws/:path*",
+        destination: "http://127.0.0.1:8000/ws/:path*",
+      },
+    ];
+  },
+};
+
+export default nextConfig;
+```
