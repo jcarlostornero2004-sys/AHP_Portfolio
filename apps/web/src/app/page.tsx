@@ -28,10 +28,11 @@ export default function QuestionnairePage() {
     setIsAnalyzing,
   } = useProfileStore();
 
-  const { data: questionsData, isLoading, isError } = useQuery({
+  const { data: questionsData, isLoading, isError, failureCount } = useQuery({
     queryKey: ["questions"],
     queryFn: getQuestions,
-    retry: 2,
+    retry: 15,
+    retryDelay: 2000,
   });
 
   const questions = questionsData?.questions ?? [];
@@ -93,12 +94,23 @@ export default function QuestionnairePage() {
     router.push("/dashboard");
   };
 
-  if (isLoading) {
+  if (isLoading || (isError && failureCount < 15)) {
+    const dots = ".".repeat((failureCount % 3) + 1);
+    const isRetrying = failureCount > 0;
     return (
       <div className="min-h-screen flex items-center justify-center bg-bg-primary">
-        <div className="flex flex-col items-center gap-4">
+        <div className="flex flex-col items-center gap-4 text-center px-4">
           <div className="w-12 h-12 border-4 border-accent-blue border-t-transparent rounded-full animate-spin" />
-          <p className="text-text-secondary">Cargando cuestionario...</p>
+          {isRetrying ? (
+            <>
+              <p className="text-text-secondary">Iniciando servidor{dots}</p>
+              <p className="text-xs text-text-secondary opacity-60">
+                Intento {failureCount + 1} de 15 — el backend puede tardar unos segundos en arrancar
+              </p>
+            </>
+          ) : (
+            <p className="text-text-secondary">Cargando cuestionario...</p>
+          )}
         </div>
       </div>
     );

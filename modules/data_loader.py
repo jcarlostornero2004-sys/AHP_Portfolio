@@ -290,6 +290,7 @@ def download_prices(
         auto_adjust=True,
         progress=False,
         threads=True,
+        timeout=30,
     )
 
     if isinstance(data.columns, pd.MultiIndex):
@@ -317,7 +318,7 @@ def download_benchmark(
     """Descarga el benchmark de un índice."""
     cfg = INDEX_CONFIG[index_key]
     ticker = cfg["benchmark"]
-    data = yf.download(ticker, start=start, end=end, auto_adjust=True, progress=False)
+    data = yf.download(ticker, start=start, end=end, auto_adjust=True, progress=False, timeout=30)
     if isinstance(data.columns, pd.MultiIndex):
         return data["Close"].iloc[:, 0].ffill().dropna()
     return data["Close"].ffill().dropna()
@@ -331,7 +332,7 @@ def get_risk_free_rate(index_key: str) -> float:
     """
     if index_key == "sp500":
         try:
-            tnx = yf.download("^TNX", period="5d", progress=False)
+            tnx = yf.download("^TNX", period="5d", progress=False, timeout=10)
             if isinstance(tnx.columns, pd.MultiIndex):
                 rate = tnx["Close"].iloc[-1, 0] / 100
             else:

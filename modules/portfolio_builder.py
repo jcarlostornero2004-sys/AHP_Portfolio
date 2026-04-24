@@ -119,9 +119,13 @@ def compute_portfolio_metrics(
     rf_daily = rf_annual / 252
     rm = benchmark_returns.mean() * 252
 
-    # Downside deviation (para Sortino)
+    # Downside deviation (para Sortino) — necesita ≥2 obs para std con ddof=1
     downside = port_returns[port_returns < rf_daily]
-    sigma_down = downside.std() * np.sqrt(252) if len(downside) > 0 else sigma
+    if len(downside) >= 2:
+        dd_std = downside.std()
+        sigma_down = dd_std * np.sqrt(252) if not np.isnan(dd_std) else sigma
+    else:
+        sigma_down = sigma
 
     # Beta
     if len(aligned) > 30:

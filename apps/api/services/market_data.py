@@ -57,62 +57,76 @@ async def poll_market_data():
         await asyncio.sleep(30)
 
 
+def _parse_close_batch(data, tickers):
+    """Extract stock entries from a yfinance download result."""
+    if data is None or data.empty:
+        return {}
+
+    close = data["Close"] if "Close" in data.columns else data.get("Adj Close", data)
+    stocks = {}
+    for ticker in tickers:
+        try:
+            col = close[ticker] if ticker in close.columns else None
+            if col is None:
+                continue
+            series = col.dropna()
+            if len(series) < 2:
+                continue
+
+            current_price = float(series.iloc[-1])
+            prev_price = float(series.iloc[-2])
+            change_1d = (current_price - prev_price) / prev_price
+            sparkline = series.tail(7).tolist()
+            change_7d = ((current_price - float(series.iloc[-7])) / float(series.iloc[-7])
+                         if len(series) >= 7 else change_1d)
+
+            stocks[ticker] = {
+                "ticker": ticker,
+                "name": ticker,
+                "price": round(current_price, 2),
+                "change_1d": round(change_1d * 100, 2),
+                "change_7d": round(change_7d * 100, 2),
+                "market_cap": None,
+                "volume": None,
+                "sector": "",
+                "index": TICKER_INDEX.get(ticker, ""),
+                "sparkline": [round(float(v), 2) for v in sparkline],
+            }
+        except Exception:
+            continue
+    return stocks
+
+
 def _fetch_all_prices():
-    """Synchronous yfinance fetch — runs in thread pool."""
+    """Synchronous yfinance fetch in batches to avoid rate limiting."""
+    import time
     _ensure_universe()
     try:
         import yfinance as yf
 
-        data = yf.download(
-            ALL_TICKERS,
-            period="8d",
-            interval="1d",
-            progress=False,
-            threads=True,
-        )
-
-        if data.empty:
-            return
-
-        close = data["Close"] if "Close" in data.columns else data.get("Adj Close", data)
+        BATCH_SIZE = 50   # max tickers per request
+        BATCH_DELAY = 1.5 # seconds between batches to avoid rate limit
 
         stocks = {}
-        for ticker in ALL_TICKERS:
+        tickers = ALL_TICKERS[:]
+
+        for i in range(0, len(tickers), BATCH_SIZE):
+            batch = tickers[i: i + BATCH_SIZE]
             try:
-                if ticker not in close.columns:
-                    continue
-                series = close[ticker].dropna()
-                if len(series) < 2:
-                    continue
+                data = yf.download(
+                    batch,
+                    period="8d",
+                    interval="1d",
+                    progress=False,
+                    threads=False,
+                    auto_adjust=True,
+                )
+                stocks.update(_parse_close_batch(data, batch))
+            except Exception as e:
+                print(f"[market_data] Batch {i//BATCH_SIZE + 1} error: {e}")
 
-                current_price = float(series.iloc[-1])
-                prev_price = float(series.iloc[-2])
-                change_1d = (current_price - prev_price) / prev_price
-
-                # 7-day sparkline
-                sparkline = series.tail(7).tolist()
-
-                # 7-day change
-                if len(series) >= 7:
-                    price_7d_ago = float(series.iloc[-7])
-                    change_7d = (current_price - price_7d_ago) / price_7d_ago
-                else:
-                    change_7d = change_1d
-
-                stocks[ticker] = {
-                    "ticker": ticker,
-                    "name": ticker,
-                    "price": round(current_price, 2),
-                    "change_1d": round(change_1d * 100, 2),
-                    "change_7d": round(change_7d * 100, 2),
-                    "market_cap": None,
-                    "volume": None,
-                    "sector": "",
-                    "index": TICKER_INDEX.get(ticker, ""),
-                    "sparkline": [round(float(v), 2) for v in sparkline],
-                }
-            except Exception:
-                continue
+            if i + BATCH_SIZE < len(tickers):
+                time.sleep(BATCH_DELAY)
 
         if stocks:
             _cache["stocks"] = stocks

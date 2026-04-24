@@ -31,9 +31,11 @@ async def analyze(req: AnalysisRequest):
 
     _last_result = result
 
-    # Strip internal data before returning
-    response = {k: v for k, v in result.items() if not k.startswith("_")}
-    return response
+    try:
+        response = {k: v for k, v in result.items() if not k.startswith("_")}
+        return response
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Error al serializar respuesta: {exc}")
 
 
 @router.post("/analyze/full")
@@ -53,8 +55,11 @@ async def analyze_full(req: QuestionnaireSubmitRequest):
 
     _last_result = result
 
-    response = {k: v for k, v in result.items() if not k.startswith("_")}
-    return response
+    try:
+        response = {k: v for k, v in result.items() if not k.startswith("_")}
+        return response
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Error al serializar respuesta: {exc}")
 
 
 def get_last_result() -> dict:

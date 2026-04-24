@@ -3,6 +3,8 @@ Pipeline service — orchestrates existing AHP modules.
 Extracted from webapp/app.py and main.py.
 """
 
+import math
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 import numpy as np
 import pandas as pd
 from datetime import datetime
@@ -14,6 +16,15 @@ from modules.stock_analysis import compute_returns, analyze_stocks
 from modules.stock_filter import run_filtering
 from modules.portfolio_builder import build_portfolios
 from modules.ahp_engine_v2 import AHPEngine
+
+
+def _safe_float(v, default: float = 0.0) -> float:
+    """Convert value to a JSON-safe Python float, replacing NaN/Inf with default."""
+    try:
+        f = float(v)
+        return default if (math.isnan(f) or math.isinf(f)) else f
+    except (TypeError, ValueError):
+        return default
 
 
 def generate_synthetic_data() -> dict:
@@ -66,13 +77,23 @@ def generate_synthetic_data() -> dict:
     }
 
 
+def _fetch_live_data_impl() -> dict:
+    """Internal: download market data (runs in a thread with timeout)."""
+    from modules.data_loader import load_market_data
+    return load_market_data(period_years=2, max_per_index=25, progress=False)
+
+
 def load_live_data() -> dict:
-    """Try loading real data from Yahoo Finance, fall back to synthetic."""
+    """Try loading real data from Yahoo Finance with a 45-second timeout, fall back to synthetic."""
     try:
-        from modules.data_loader import load_market_data
-        data = load_market_data(period_years=2, max_per_index=100, progress=False)
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(_fetch_live_data_impl)
+            data = future.result(timeout=45)
         data["metadata"]["synthetic"] = False
         return data
+    except FuturesTimeoutError:
+        print("  Live data timed out after 45s, using synthetic data")
+        return generate_synthetic_data()
     except Exception as e:
         print(f"  Real data unavailable ({e}), using synthetic data")
         return generate_synthetic_data()
@@ -153,21 +174,21 @@ def run_analysis_pipeline(profile: str, use_live: bool = True) -> dict:
     ranking_list = []
     for _, row in ranking.iterrows():
         ranking_list.append({
-            "name": row["portafolio"],
-            "score": round(row["score_pct"], 1),
+            "name": str(row["portafolio"]),
+            "score": _safe_float(row["score_pct"], 0.0),
             "rank": int(row["ranking"]),
         })
 
     portfolios_detail = []
     for pname, prow in best.iterrows():
         portfolios_detail.append({
-            "name": pname,
-            "rentabilidad": round(float(prow.get("rentabilidad", 0)) * 100, 2),
-            "volatilidad": round(float(prow.get("volatilidad", 0)) * 100, 2),
-            "sharpe": round(float(prow.get("sharpe", 0)), 2),
-            "max_drawdown": round(float(prow.get("max_drawdown", 0)) * 100, 2),
-            "beta": round(float(prow.get("beta", 0)), 2),
-            "alpha": round(float(prow.get("alpha", 0)) * 100, 2),
+            "name": str(pname),
+            "rentabilidad": round(_safe_float(prow.get("rentabilidad", 0)) * 100, 2),
+            "volatilidad": round(_safe_float(prow.get("volatilidad", 0)) * 100, 2),
+            "sharpe": round(_safe_float(prow.get("sharpe", 0)), 2),
+            "max_drawdown": round(_safe_float(prow.get("max_drawdown", 0)) * 100, 2),
+            "beta": round(_safe_float(prow.get("beta", 0)), 2),
+            "alpha": round(_safe_float(prow.get("alpha", 0)) * 100, 2),
             "tickers": str(prow.get("tickers", "")),
             "pesos": str(prow.get("pesos", "")),
         })
@@ -175,11 +196,11 @@ def run_analysis_pipeline(profile: str, use_live: bool = True) -> dict:
     stocks_list = []
     for ticker, srow in selected.head(8).iterrows():
         stocks_list.append({
-            "ticker": ticker,
-            "rentabilidad": round(float(srow["rentabilidad"]) * 100, 2),
-            "sharpe": round(float(srow["sharpe"]), 2),
-            "volatilidad": round(float(srow["volatilidad"]) * 100, 2),
-            "beta": round(float(srow["beta"]), 2),
+            "ticker": str(ticker),
+            "rentabilidad": round(_safe_float(srow["rentabilidad"]) * 100, 2),
+            "sharpe": round(_safe_float(srow["sharpe"]), 2),
+            "volatilidad": round(_safe_float(srow["volatilidad"]) * 100, 2),
+            "beta": round(_safe_float(srow["beta"]), 2),
         })
 
     winner = ranking_list[0]
@@ -187,14 +208,17 @@ def run_analysis_pipeline(profile: str, use_live: bool = True) -> dict:
     winner_data = best.loc[winner_name]
 
     allocation = []
-    if "pesos" in winner_data and isinstance(winner_data["pesos"], str):
-        for pair in winner_data["pesos"].split(", "):
+    pesos_val = winner_data.get("pesos", "") if hasattr(winner_data, "get") else ""
+    if isinstance(pesos_val, str) and pesos_val:
+        for pair in pesos_val.split(", "):
             parts = pair.split(":")
             if len(parts) == 2:
                 allocation.append({
                     "ticker": parts[0].strip(),
                     "weight": parts[1].strip(),
                 })
+
+    cr_val = _safe_float(engine.criteria_cr, 0.0)
 
     return {
         "success": True,
@@ -207,10 +231,10 @@ def run_analysis_pipeline(profile: str, use_live: bool = True) -> dict:
         "stocks": stocks_list,
         "winner": winner,
         "allocation": allocation,
-        "n_stocks_analyzed": len(consolidated),
-        "n_stocks_selected": len(selected),
-        "consistency_ratio": round(engine.criteria_cr, 4),
-        "is_synthetic": is_synthetic,
+        "n_stocks_analyzed": int(len(consolidated)),
+        "n_stocks_selected": int(len(selected)),
+        "consistency_ratio": round(cr_val, 4),
+        "is_synthetic": bool(is_synthetic),
         # Store internal data for backtest/export
         "_market_data": market_data,
         "_consolidated": consolidated,

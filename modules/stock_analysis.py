@@ -52,10 +52,12 @@ def sortino_ratio(returns: pd.Series, rf_annual: float, trading_days: int = 252)
     rp = annualized_return(returns, trading_days)
     rf_daily = rf_annual / trading_days
     downside = returns[returns < rf_daily]
-    if len(downside) == 0:
-        return 0.0
-    sigma_down = downside.std() * np.sqrt(trading_days)
-    if sigma_down == 0:
+    if len(downside) < 2:
+        sigma_down = annualized_volatility(returns, trading_days)
+    else:
+        dd_std = downside.std()
+        sigma_down = dd_std * np.sqrt(trading_days) if not np.isnan(dd_std) else annualized_volatility(returns, trading_days)
+    if sigma_down == 0 or np.isnan(sigma_down):
         return 0.0
     return (rp - rf_annual) / sigma_down
 
