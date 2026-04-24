@@ -10,6 +10,12 @@ import { Button } from "../components/ui/Button";
 import { Progress } from "../components/ui/Progress";
 import { PROFILE_COLORS, PROFILE_LABELS } from "../lib/constants";
 
+function getSection(index: number): string {
+  if (index < 3) return "Sección 1: Perfil de Riesgo";
+  if (index < 6) return "Sección 2: Horizonte Temporal";
+  return "Sección 3: Objetivos Financieros";
+}
+
 export default function QuestionnairePage() {
   const router = useRouter();
   const [currentQ, setCurrentQ] = useState(0);
@@ -41,7 +47,6 @@ export default function QuestionnairePage() {
   const progress = totalQuestions > 0 ? ((currentQ + 1) / totalQuestions) * 100 : 0;
   const allAnswered = questions.length > 0 && questions.every((q) => answers[q.id]);
 
-  // Clear stale answers when question IDs change (e.g. after a questionnaire update)
   useEffect(() => {
     if (questions.length === 0) return;
     const questionIds = new Set(questions.map((q) => q.id));
@@ -94,6 +99,7 @@ export default function QuestionnairePage() {
     router.push("/dashboard");
   };
 
+  // Loading / retry screen
   if (isLoading || (isError && failureCount < 15)) {
     const dots = ".".repeat((failureCount % 3) + 1);
     const isRetrying = failureCount > 0;
@@ -116,6 +122,7 @@ export default function QuestionnairePage() {
     );
   }
 
+  // Connection error screen
   if (isError) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-bg-primary">
@@ -139,12 +146,23 @@ export default function QuestionnairePage() {
   if (showReveal && profileResult) {
     const profileColor = PROFILE_COLORS[profileResult.profile] || "#3b82f6";
     return (
-      <div className="min-h-screen flex items-center justify-center bg-bg-primary px-4">
+      <div className="min-h-screen flex items-center justify-center bg-bg-primary px-4 relative overflow-hidden">
+        {/* Pulsing radial glow behind card */}
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+          <motion.div
+            initial={{ scale: 0.5, opacity: 0 }}
+            animate={{ scale: 2, opacity: 0 }}
+            transition={{ duration: 2, repeat: Infinity, ease: "easeOut" }}
+            className="w-64 h-64 rounded-full"
+            style={{ backgroundColor: profileColor }}
+          />
+        </div>
+
         <motion.div
           initial={{ scale: 0.8, opacity: 0 }}
           animate={{ scale: 1, opacity: 1 }}
-          transition={{ duration: 0.6, ease: "easeOut" }}
-          className="max-w-lg w-full"
+          transition={{ duration: 0.8, ease: [0.16, 1, 0.3, 1] }}
+          className="max-w-lg w-full relative z-10"
         >
           <div
             className="rounded-2xl p-8 text-center border border-border"
@@ -214,7 +232,11 @@ export default function QuestionnairePage() {
                   </p>
                 </div>
               ) : analysisError ? (
-                <Button size="lg" variant="ghost" onClick={() => { setShowReveal(false); setAnalysisError(null); }}>
+                <Button
+                  size="lg"
+                  variant="ghost"
+                  onClick={() => { setShowReveal(false); setAnalysisError(null); }}
+                >
                   Volver al cuestionario
                 </Button>
               ) : (
@@ -234,7 +256,19 @@ export default function QuestionnairePage() {
     <div className="min-h-screen flex flex-col items-center justify-center bg-bg-primary px-4">
       <div className="w-full max-w-xl mb-8">
         <div className="flex items-center justify-between mb-3">
-          <h1 className="text-lg font-semibold">AHP Portfolio Selector</h1>
+          {/* Upgraded header */}
+          <div className="flex items-center gap-3">
+            <div
+              className="w-8 h-8 rounded-lg flex items-center justify-center text-white font-bold text-sm"
+              style={{ background: "linear-gradient(135deg, #3b82f6, #06b6d4)" }}
+            >
+              AHP
+            </div>
+            <div>
+              <h1 className="text-lg font-bold gradient-text">Cuestionario de Inversión</h1>
+              <p className="text-[10px] text-text-secondary">Define tu perfil en minutos</p>
+            </div>
+          </div>
           <span className="text-sm text-text-secondary">
             {currentQ + 1} / {totalQuestions}
           </span>
@@ -253,6 +287,11 @@ export default function QuestionnairePage() {
               transition={{ duration: 0.3 }}
               className="bg-bg-secondary border border-border rounded-2xl p-8"
             >
+              {/* Section label */}
+              <p className="text-xs text-accent-blue uppercase tracking-widest mb-2 font-medium">
+                {getSection(currentQ)}
+              </p>
+
               <h2 className="text-xl font-semibold mb-6 leading-relaxed">
                 {currentQuestion.text}
               </h2>

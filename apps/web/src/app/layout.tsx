@@ -14,8 +14,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "AHP Portfolio — Selección Multicriterio de Carteras",
-  description: "Plataforma de inversión con selección de cartera mediante el método AHP de análisis multicriterio jerárquico",
+  title: "AHP Invest — Robo Advisor Inteligente",
+  description:
+    "Construye tu cartera de inversión óptima con inteligencia artificial y el método de análisis multicriterio AHP.",
 };
 
 export default function RootLayout({
