@@ -1,37 +1,75 @@
 /**
  * Starts the FastAPI backend using python -m uvicorn.
  * Cross-platform: works on Windows, Mac, and Linux.
- * Checks .venv first, then falls back to system Python.
+ * Validates that the chosen Python actually has uvicorn before using it.
  */
 const { spawn, spawnSync } = require("child_process");
 const path = require("path");
 const fs = require("fs");
+const os = require("os");
 
 const ROOT = __dirname;
 const isWin = process.platform === "win32";
+const HOME = os.homedir();
+
+function hasUvicorn(pythonCmd) {
+  try {
+    const r = spawnSync(
+      pythonCmd,
+      ["-c", "import uvicorn"],
+      { timeout: 5000, encoding: "utf8" }
+    );
+    return r.status === 0;
+  } catch (_) {
+    return false;
+  }
+}
 
 function findPython() {
-  // 1. Project virtual environment
+  // Build candidate list — most specific first, PATH last
+  const candidates = [];
+
+  // 1. Project venv (only if uvicorn is actually installed there)
   const venvPython = isWin
     ? path.join(ROOT, ".venv", "Scripts", "python.exe")
     : path.join(ROOT, ".venv", "bin", "python");
-  if (fs.existsSync(venvPython)) return venvPython;
+  if (fs.existsSync(venvPython)) candidates.push(venvPython);
 
-  // 2. python3 / python on PATH
-  for (const cmd of ["python3", "python"]) {
-    try {
-      const r = spawnSync(cmd, ["--version"], { timeout: 3000, encoding: "utf8" });
-      if (r.status === 0) return cmd;
-    } catch (_) {}
+  // 2. Common Windows install locations (pythoncore / AppData)
+  if (isWin) {
+    const winCandidates = [
+      path.join(HOME, "AppData", "Local", "Python", "pythoncore-3.14-64", "python.exe"),
+      path.join(HOME, "AppData", "Local", "Python", "pythoncore-3.13-64", "python.exe"),
+      path.join(HOME, "AppData", "Local", "Python", "pythoncore-3.12-64", "python.exe"),
+      path.join(HOME, "AppData", "Local", "Programs", "Python", "Python314", "python.exe"),
+      path.join(HOME, "AppData", "Local", "Programs", "Python", "Python313", "python.exe"),
+      path.join(HOME, "AppData", "Local", "Programs", "Python", "Python312", "python.exe"),
+      path.join(HOME, "AppData", "Local", "Programs", "Python", "Python311", "python.exe"),
+    ];
+    for (const c of winCandidates) {
+      if (fs.existsSync(c)) candidates.push(c);
+    }
   }
 
+  // 3. PATH fallbacks
+  candidates.push("python3", "python");
+
+  // Pick first candidate that can actually import uvicorn
+  for (const cmd of candidates) {
+    if (hasUvicorn(cmd)) {
+      return cmd;
+    }
+  }
   return null;
 }
 
+console.log("[API] Locating Python with uvicorn...");
 const python = findPython();
+
 if (!python) {
-  console.error("[API] ERROR: Python not found. Install it from https://www.python.org/downloads/");
-  console.error("[API]        Then run: pip install -r requirements.txt");
+  console.error("[API] ERROR: No Python installation found that has uvicorn.");
+  console.error("[API]        Run: pip install -r requirements.txt");
+  console.error("[API]        Then retry: npm run dev");
   process.exit(1);
 }
 
