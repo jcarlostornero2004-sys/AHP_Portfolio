@@ -182,15 +182,26 @@ def run_analysis_pipeline(profile: str, use_live: bool = True) -> dict:
     portfolios_detail = []
     for pname, prow in best.iterrows():
         portfolios_detail.append({
-            "name": str(pname),
-            "rentabilidad": round(_safe_float(prow.get("rentabilidad", 0)) * 100, 2),
-            "volatilidad": round(_safe_float(prow.get("volatilidad", 0)) * 100, 2),
-            "sharpe": round(_safe_float(prow.get("sharpe", 0)), 2),
-            "max_drawdown": round(_safe_float(prow.get("max_drawdown", 0)) * 100, 2),
-            "beta": round(_safe_float(prow.get("beta", 0)), 2),
-            "alpha": round(_safe_float(prow.get("alpha", 0)) * 100, 2),
-            "tickers": str(prow.get("tickers", "")),
-            "pesos": str(prow.get("pesos", "")),
+            "name":             str(pname),
+            # Percentage-scaled metrics
+            "rentabilidad":     round(_safe_float(prow.get("rentabilidad",     0)) * 100, 3),
+            "volatilidad":      round(_safe_float(prow.get("volatilidad",      0)) * 100, 3),
+            "alpha":            round(_safe_float(prow.get("alpha",            0)) * 100, 3),
+            "max_drawdown":     round(_safe_float(prow.get("max_drawdown",     0)) * 100, 3),
+            "var_95":           round(_safe_float(prow.get("var_95",           0)) * 100, 3),
+            "cvar_95":          round(_safe_float(prow.get("cvar_95",          0)) * 100, 3),
+            "tracking_error":   round(_safe_float(prow.get("tracking_error",   0)) * 100, 3),
+            "rentab_kp":        round(_safe_float(prow.get("rentab_kp",        0)) * 100, 3),
+            # Dimensionless metrics
+            "sharpe":           round(_safe_float(prow.get("sharpe",           0)), 3),
+            "sortino":          round(_safe_float(prow.get("sortino",          0)), 3),
+            "beta":             round(_safe_float(prow.get("beta",             0)), 3),
+            "cv":               round(_safe_float(prow.get("cv",               0)), 3),
+            "skewness":         round(_safe_float(prow.get("skewness",         0)), 3),
+            "corr_media":       round(_safe_float(prow.get("corr_media",       0)), 3),
+            "div_geo":          round(_safe_float(prow.get("div_geo",          0)), 3),
+            "tickers":          str(prow.get("tickers", "")),
+            "pesos":            str(prow.get("pesos", "")),
         })
 
     stocks_list = []
