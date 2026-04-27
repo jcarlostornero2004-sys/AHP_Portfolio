@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { motion } from "framer-motion";
 import { useProfileStore } from "../../hooks/useProfile";
+import { useTheme } from "../../hooks/useTheme";
 import { PROFILE_COLORS, PROFILE_LABELS } from "../../lib/constants";
 
 const navItems = [
@@ -19,6 +20,7 @@ const navItems = [
 export function Sidebar() {
   const pathname = usePathname();
   const { profileResult } = useProfileStore();
+  const { theme, toggle } = useTheme();
 
   const profileColor = profileResult
     ? PROFILE_COLORS[profileResult.profile] || "#3b82f6"
@@ -28,10 +30,7 @@ export function Sidebar() {
     : null;
 
   return (
-    <aside
-      className="fixed left-0 top-0 h-full w-64 border-r border-border flex flex-col z-40"
-      style={{ background: "linear-gradient(180deg, #161b22 0%, #0d1117 100%)" }}
-    >
+    <aside className="sidebar-bg fixed left-0 top-0 h-full w-64 border-r border-border flex flex-col z-40">
       {/* Logo */}
       <Link href="/" className="flex items-center gap-3 px-6 py-5 border-b border-border relative">
         {/* Subtle glow line under logo area */}
@@ -115,6 +114,18 @@ export function Sidebar() {
             </span>
           </div>
         )}
+        <button
+          onClick={toggle}
+          className="flex items-center gap-2 w-full text-xs text-text-secondary hover:text-accent-blue transition-colors cursor-pointer"
+        >
+          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            {theme === "dark"
+              ? <path strokeLinecap="round" strokeLinejoin="round" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" />
+              : <path strokeLinecap="round" strokeLinejoin="round" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
+            }
+          </svg>
+          {theme === "dark" ? "Tema claro" : "Tema oscuro"}
+        </button>
         <Link
           href="/questionnaire"
           className="flex items-center gap-2 text-xs text-text-secondary hover:text-accent-blue transition-colors"
