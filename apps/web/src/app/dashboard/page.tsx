@@ -23,7 +23,7 @@ export default function DashboardPage() {
         <div className="flex flex-col items-center justify-center h-[60vh] gap-4">
           <p className="text-text-secondary text-lg">Todavía no hay resultados de análisis.</p>
           <button
-            onClick={() => router.push("/")}
+            onClick={() => router.push("/questionnaire")}
             className="text-accent-blue hover:underline cursor-pointer"
           >
             Completa primero el cuestionario
