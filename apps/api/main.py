@@ -46,11 +46,12 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS middleware
+# CORS middleware — allow all origins so the Vercel-deployed frontend
+# (server-side proxy) and any future domains work without config changes.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.cors_origins,
-    allow_credentials=True,
+    allow_origins=["*"],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
